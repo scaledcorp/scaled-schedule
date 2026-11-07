@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Browser tab icon: the small Wake mark, switching colors with the visitor's light/dark setting. -->
+  <style>
+    .r { stroke: #0B6BCB; }
+    .d { fill: #0A1A2E; }
+    @media (prefers-color-scheme: dark) {
+      .r { stroke: #2FA8FF; }
+      .d { fill: #EAF4FF; }
+    }
+  </style>
+  <g class="r" fill="none">
+    <circle cx="50" cy="50" r="38" stroke-width="7"/>
+    <circle cx="56.05" cy="43.95" r="19" stroke-width="9"/>
+  </g>
+  <circle class="d" cx="62.1" cy="37.9" r="5.5"/>
+</svg>

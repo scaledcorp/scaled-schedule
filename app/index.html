@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scaled Schedule</title>
+<meta name="description" content="A free, open-source project scheduler. Gantt charts, critical path, resources, and Microsoft Project, Primavera P6 and Jira files.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Set the theme before first paint so there is no flash.
+  try { document.documentElement.dataset.theme = localStorage.getItem('scaled-schedule:theme')
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch { document.documentElement.dataset.theme = 'light'; }
+</script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <a class="lockup" href="https://scaledcorp.com" target="_blank" rel="noopener" aria-label="scaled">
+      <svg viewBox="7 7 86 86" aria-hidden="true"><g class="rings"><circle cx="50" cy="50" r="40" stroke-width="2.2"/><circle cx="53.2" cy="46.8" r="30" stroke-width="2.8"/><circle cx="56.3" cy="43.7" r="20" stroke-width="3.4"/><circle cx="59.5" cy="40.5" r="10" stroke-width="4"/></g><circle class="core" cx="62.7" cy="37.3" r="3.3"/></svg><span>scaled</span>
+    </a>
+    <span class="product">Schedule</span>
+    <input class="proj-name" id="projName" aria-label="Project name" spellcheck="false">
+    <div class="tb">
+      <button class="btn" data-cmd="open" title="Open a file (Ctrl+O)"></button>
+      <button class="btn" data-cmd="save" title="Save (Ctrl+S)"></button>
+      <button class="btn" data-cmd="exportMenu" title="Export to Microsoft Project, Primavera P6, CSV or Jira"></button>
+    </div>
+    <div class="tb">
+      <button class="btn icon" data-cmd="undo" title="Undo (Ctrl+Z)"></button>
+      <button class="btn icon" data-cmd="redo" title="Redo (Ctrl+Y)"></button>
+    </div>
+    <div class="tb">
+      <button class="btn primary" data-cmd="addTask" title="Add a task below (Ctrl+Enter)"></button>
+      <button class="btn icon" data-cmd="addMilestone" title="Add a milestone"></button>
+      <button class="btn icon" data-cmd="outdent" title="Outdent (Alt+Shift+Left)"></button>
+      <button class="btn icon" data-cmd="indent" title="Indent (Alt+Shift+Right)"></button>
+      <button class="btn icon" data-cmd="link" title="Link selected tasks (Ctrl+L)"></button>
+      <button class="btn icon" data-cmd="unlink" title="Unlink (Ctrl+Shift+L)"></button>
+      <button class="btn icon" data-cmd="details" title="Task details (Shift+F2)"></button>
+    </div>
+    <div class="spacer"></div>
+    <div class="tb">
+      <div class="seg" role="tablist">
+        <button class="btn on" data-view="gantt">Gantt</button>
+        <button class="btn" data-view="resources">Resources</button>
+      </div>
+    </div>
+    <div class="tb">
+      <button class="btn icon" data-cmd="zoomOut" title="Zoom out (Ctrl+scroll)"></button>
+      <button class="btn icon" data-cmd="zoomIn" title="Zoom in (Ctrl+scroll)"></button>
+      <button class="btn icon" data-cmd="scrollToTask" title="Scroll to the selected task"></button>
+      <button class="btn icon" data-cmd="critical" title="Show the critical path"></button>
+      <button class="btn icon" data-cmd="settings" title="Project and calendar settings"></button>
+      <button class="btn icon" data-cmd="theme" title="Light or dark"></button>
+      <button class="btn icon" data-cmd="palette" title="All commands (Ctrl+K)"></button>
+    </div>
+  </header>
+
+  <main class="workspace" id="ganttView">
+    <section class="pane" id="gridPane">
+      <div class="grid-head" id="gridHead"></div>
+      <div class="grid-body" id="gridBody" tabindex="0" aria-label="Task table"><div class="grid-inner" id="gridInner"></div></div>
+    </section>
+    <div class="splitter" id="splitter" title="Drag to resize"></div>
+    <section class="pane" id="chartPane">
+      <div class="timescale" id="timescale"><div class="ts-inner" id="tsInner"></div></div>
+      <div class="chart-body" id="chartBody"><div class="chart-canvas" id="chartCanvas"></div></div>
+      <div class="empty" id="empty" hidden>
+        <div class="card">
+          <h3>Start your schedule</h3>
+          <p>Type a task name in the table, open a Microsoft Project, CSV or Jira file, or drop one anywhere on the page.</p>
+          <button class="btn primary" data-cmd="sample">Open the sample project</button>
+        </div>
+      </div>
+    </section>
+    <aside class="details" id="details" aria-label="Task details"></aside>
+  </main>
+
+  <main class="sheet-wrap" id="resourceView" hidden></main>
+
+  <footer class="statusbar" id="status"></footer>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<dialog id="dialog"></dialog>
+<div class="palette" id="palette" hidden><div class="box"><input id="paletteInput" placeholder="Type a command" aria-label="Command"><ul id="paletteList"></ul></div></div>
+<input type="file" id="fileInput" accept=".sched,.json,.xml,.xer,.csv" hidden>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

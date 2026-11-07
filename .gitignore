@@ -1,0 +1,6 @@
+# personal schedules and exports
+*.sched
+*.xer
+!tests/**
+.DS_Store
+Thumbs.db
