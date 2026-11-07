@@ -247,5 +247,39 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0
 .empty p { margin: 0 0 16px; color: var(--muted); }
 .drop-hint { position: fixed; inset: 10px; z-index: 90; border: 3px dashed var(--azure); border-radius: 22px; background: color-mix(in srgb, var(--azure) 8%, transparent);
   display: grid; place-items: center; font-size: 20px; font-weight: 600; color: var(--azure); pointer-events: none; animation: pop .2s var(--spring); }
+/* ---------- Schedule Iguana */
+.iguana-btn { position: fixed; right: 18px; bottom: 46px; z-index: 40; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 18px;
+  background: none; cursor: pointer; box-shadow: var(--shadow-pop); transition: transform .25s var(--spring), opacity .2s; }
+.iguana-btn img { width: 100%; height: 100%; display: block; border-radius: 18px; }
+.iguana-btn:hover { transform: translateY(-3px) rotate(-4deg); }
+.iguana-btn:active { transform: scale(.9); }
+.iguana-btn.hide { opacity: 0; transform: scale(.6); pointer-events: none; }
+.iguana { position: fixed; right: 16px; bottom: 44px; z-index: 45; width: min(380px, calc(100vw - 32px)); height: min(560px, calc(100vh - 120px));
+  display: flex; flex-direction: column; background: var(--pane); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-pop);
+  transform-origin: bottom right; transform: scale(.85) translateY(12px); opacity: 0; pointer-events: none;
+  transition: transform .34s var(--spring), opacity .2s; }
+.iguana.open { transform: none; opacity: 1; pointer-events: auto; }
+.iguana header { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--line-soft); }
+.iguana header img { width: 38px; height: 38px; border-radius: 12px; }
+.iguana header div { flex: 1; display: grid; }
+.iguana header small { color: var(--muted); font-size: 12px; }
+.ig-log { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.ig-msg { max-width: 88%; padding: 9px 12px; border-radius: 14px 14px 14px 4px; background: var(--pane-2); font-size: 13.5px; line-height: 1.45;
+  animation: pop .28s var(--spring); }
+.ig-msg.user { align-self: flex-end; background: var(--azure); color: #fff; border-radius: 14px 14px 4px 14px; }
+.ig-msg p { margin: 0 0 6px; }
+.ig-msg ul { margin: 0 0 8px; padding-left: 18px; color: var(--muted); }
+.ig-acts { display: flex; gap: 6px; }
+.ig-acts .btn { height: 30px; }
+.ig-link { border: 0; background: none; color: var(--azure); font-weight: 600; cursor: pointer; padding: 0; }
+.ig-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 10px; }
+.ig-chips button { border: 1px solid var(--line); background: var(--pane); border-radius: 999px; padding: 5px 11px; font-size: 12.5px;
+  color: var(--muted); cursor: pointer; transition: transform .18s var(--spring), border-color .15s, color .15s; }
+.ig-chips button:hover { border-color: #12B886; color: var(--ink); }
+.ig-chips button:active { transform: scale(.94); }
+.ig-input { display: flex; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
+.ig-input input { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; background: var(--pane); }
+.ig-input input:focus { outline: none; border-color: #12B886; box-shadow: 0 0 0 3px rgba(18,184,134,.25); }
+@media print { .iguana, .iguana-btn { display: none !important; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 @media print { .topbar, .statusbar, .splitter, .details, .toasts { display: none !important; } body { overflow: visible; } }
