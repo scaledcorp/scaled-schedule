@@ -2,7 +2,7 @@
 // answers questions from the computed schedule. Version 1 reads requests with built-in rules (instant,
 // offline, nothing to download). A small local AI model can sit behind the same plan format later.
 import { deleteTasks, fmtDate, fmtHours, fmtMoney, formatDuration, insertTask, parseAssignments, parseDay,
-  parseDuration, startOfDay, subtreeEnd, yearOf } from '../model.js';
+  parseDuration, startOfDay, subtreeEnd, todayMinutes, yearOf } from '../model.js';
 import { schedule } from '../scheduler.js';
 import { setPercent } from './panels.js';
 
@@ -32,9 +32,100 @@ const plan = (label, lines, run, extra = {}) => ({ kind: 'plan', label, lines: l
 const idx = (p, t) => p.tasks.findIndex(x => x.id === t.id);
 const pick = (p, t) => p.tasks.find(x => x.id === t.id);
 
+// ---------------------------------------------------------------- everyday wording
+// Rewrites the ways people actually talk into the phrasings below, before anything is matched.
+// Returns { text, rewrote } so Iguana can say "I read that as …" when a rule changed the meaning.
+const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, 'a couple of': 2, 'a couple': 2, 'a few': 3, a: 1, an: 1, half: 0.5 };
+const PERSON = "([A-Z][\\w'.-]*(?: [A-Z][\\w'.-]*)?)";
+const REWRITES = [
+  // questions
+  [/^.*\b(?:miss(?:ing)? the (?:deadline|date|finish)|make us late|making us late|bottleneck|holding up the (?:project|finish)|driving the (?:finish|end date))\b.*$/i, "what's on the critical path?"],
+  [/^.*\bwho(?:'s| is| are)? (?:overloaded|slammed|swamped|too busy|double.?booked|overworked)\b.*$/i, "who's over-booked?"],
+  [/^.*\b(?:when (?:are|will) we (?:be )?(?:done|finished)|when(?:'s| is) (?:the )?(?:end|finish|deadline)|what(?:'s| is) the (?:end|finish) date)\b.*$/i, 'when does the project finish?'],
+  [/^(?:what(?:'s| is) )?(?:holding up|blocking|delaying) (.+?)\??$/i, 'why did $1 move?'],
+  [/^what(?:'s| is) (.+?) waiting (?:on|for)\??$/i, 'why did $1 move?'],
+  [/^why is (.+?) (?:so )?late\??$/i, 'why did $1 move?'],
+  // moves
+  [/^(?:slide|push|delay|bump|postpone|reschedule|shift|slip|move) (.+?) (?:out |back |up )?(?:to|until|till|til|for|on) (.+)$/i, 'move $1 to $2'],
+  [/^(.+?) (?:needs to|has to|should|will|can) (?:slide|move|slip|be pushed|be moved|start|be delayed) (?:out |back )?(?:to|until|till|on) (.+)$/i, 'move $1 to $2'],
+  // links
+  [/^(.+?) (?:has to|needs to|must|should) (?:happen|be (?:done|finished|complete)|finish|come|go) (?:before|ahead of) (.+?)(?: (?:can )?starts?)?$/i, 'link $1 to $2'],
+  [/^(.+?) (?:can't|cannot|can not|shouldn't) start (?:until|till|before) (.+?)(?: is (?:done|finished|complete)| finishes)?$/i, 'link $2 to $1'],
+  [/^(.+?) (?:waits for|comes after|follows) (.+)$/i, 'link $2 to $1'],
+  [/^(.+?) comes before (.+)$/i, 'link $1 to $2'],
+  // durations
+  [/^(.+?) (?:is going to take|is gonna take|will need|needs|should be|will be|is) (\d+(?:\.\d+)?) ?(minutes?|hours?|days?|weeks?|months?)(?: long)?$/i, '$1 takes $2 $3'],
+  [/^give (.+?) (\d+(?:\.\d+)?) ?(hours?|days?|weeks?)$/i, 'make $1 $2 $3'],
+  // progress
+  [/^(?:we(?:'re| are) )?halfway (?:through|done with) (.+)$/i, '$1 is 50% done'],
+  [/^(.+?) (?:is|got|was) (?:all |completely )?(?:done|finished|complete|wrapped up|wrapped)$/i, '$1 is done'],
+  [/^(.+?) (?:got done|got finished|got wrapped up|wrapped up|is wrapped up|is in the bag|finished up)$/i, '$1 is done'],
+  [/^(.+?) is halfway(?: done)?$/i, '$1 is 50% done'],
+  // delete, rename, assign
+  [/^(?:drop|cut|scrap|nix|kill|cancel|get rid of|toss|axe) (?:the )?(.+)$/i, 'delete $1'],
+  [/^(?:call|name) (.+?) (.+?) instead$/i, 'rename $1 to $2'],
+  [/^change the name of (.+?) to (.+)$/i, 'rename $1 to $2'],
+  [new RegExp(`^${PERSON} (?:will|can|should|is going to|is gonna) (?:handle|own|do|take|run|lead|work on) (.+)$`), 'give $2 to $1'],
+  [/^(?:have|let) ([A-Z][\w'.-]*) (?:do|handle|own|take|run) (.+)$/, 'give $2 to $1'],
+  // adding
+  [/^(?:fit|squeeze|slot|throw|put|get|tack|work) (?:in |on )?(.+)$/i, 'add $1'],
+];
+
+export function normalize(input) {
+  let s = ` ${input.trim().replace(/\s+/g, ' ')} `;
+  // greetings and filler: these don't change the meaning
+  s = s.replace(/^\s*(?:hey|hi|ok|okay|so)?\s*(?:schedule )?(?:iguana)?[,!:]?\s*/i, ' ')
+    .replace(/^\s*(?:please|can you|could you|would you|can we|could we|let'?s|i need you to|i want to|we need to|we should|go ahead and|i'd like to)\s+/i, ' ')
+    .replace(/\s*(?:please|for me|thanks|thank you|asap|today|yesterday|this morning|last week)[.!]*\s*$/i, ' ')
+    .replace(/[.!]+\s*$/, ' ');
+  const plain = s.trim();
+  // number words before units: "three days", "a couple of weeks", "half a day"
+  s = s.replace(/\bhalf an? (hour|day|week)\b/gi, '0.5 $1')
+    .replace(/\b(a couple of|a couple|a few|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|an?)[ -](minutes?|hours?|days?|weeks?|months?)\b/gi,
+      (x, w, u) => `${WORDS[w.toLowerCase()]} ${u}`);
+  // "once Build is done", "when Build finishes" -> "after Build"
+  s = s.replace(/\b(?:once|when|as soon as|after) (.+?) (?:is (?:done|finished|complete|wrapped up)|finishes|wraps(?: up)?|ends|is over)\b/gi, 'after $1');
+  // ", Ana will handle it", "and Ana can own it", "have Ana do it" -> "and give it to Ana"
+  s = s.replace(new RegExp(`[,;]?\\s*(?:and )?${PERSON} (?:will|can|should|is going to|is gonna|could) (?:handle|own|do|take|run|lead|cover) (?:it|that|this)\\b`), ' and give it to $1')
+    .replace(/[,;]?\s*(?:and )?(?:have|let) ([A-Z][\w'.-]*) (?:do|handle|own|take|run) (?:it|that|this)\b/, ' and give it to $1')
+    .replace(/\b(\d+(?:\.\d+)?) (minutes?|hours?|days?|weeks?|months?) of (.+?)(?= after | and | for |\s*$)/i, '$3 $1 $2');
+  s = s.trim().replace(/\s+([,?])/g, '$1');
+  let rewrote = s !== plain;
+  for (const [re, to] of REWRITES) {
+    if (re.test(s)) { s = s.replace(re, to); rewrote = true; break; }
+  }
+  return { text: s, rewrote };
+}
+
+// "Jan 20", "the 20th", "tomorrow", "next Monday", "in 2 weeks" -> day index (null if unreadable).
+export function readDay(text, refYear, today = Math.floor(todayMinutes() / 1440)) {
+  const s = clean(text).toLowerCase().replace(/(\d)(st|nd|rd|th)\b/g, '$1').replace(/^(?:on |the )/, '');
+  const exact = parseDay(s, refYear);
+  if (exact != null) return exact;
+  if (s === 'today') return today;
+  if (s === 'tomorrow') return today + 1;
+  let m = s.match(/^(?:next |this )?(sun|mon|tue|wed|thu|fri|sat)[a-z]*$/);
+  if (m) {
+    const want = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(m[1]);
+    let d = today + 1;
+    while (((d + 4) % 7 + 7) % 7 !== want) d++;
+    return s.startsWith('next ') && d - today < 7 ? d + 7 * (d - today <= 0 ? 1 : 0) : d;
+  }
+  if ((m = s.match(/^in (\d+) (day|week)s?$/))) return today + +m[1] * (m[2] === 'week' ? 7 : 1);
+  return null;
+}
+
 // Reads one request. Returns a plan (shown as a preview, then run through the normal undo history),
 // an answer, or "undo". Pure: it never changes the project itself.
-export function interpret(text, { project, computed }) {
+export function interpret(text, ctx) {
+  const n = normalize(text);
+  const res = interpretCore(n.text, ctx);
+  if (n.rewrote && n.text.toLowerCase() !== text.trim().toLowerCase() && !res.unknown) res.as = n.text;
+  return res;
+}
+
+function interpretCore(text, { project, computed }) {
   const s = text.trim().replace(/\s+/g, ' '), low = s.toLowerCase();
   const k = t => computed.byId.get(t.id);
   let m;
@@ -93,8 +184,8 @@ export function interpret(text, { project, computed }) {
   if ((m = s.match(/^(?:move|start|schedule|push|shift) (.+?) (?:to|on|for|until|at) (.+)$/i))) {
     const t = findTask(project, m[1]);
     if (!t) return notFound(m[1]);
-    const day = parseDay(clean(m[2]).replace(/(\d)(st|nd|rd|th)\b/, '$1'), yearOf(k(t).es));
-    if (day == null) return { kind: 'answer', text: `I couldn't read "${clean(m[2])}" as a date. Try "March 15" or 3/15/27.` };
+    const day = readDay(m[2], yearOf(k(t).es));
+    if (day == null) return { kind: 'answer', text: `I couldn't read "${clean(m[2])}" as a date. Try "March 15", "next Monday" or 3/15/27.` };
     return plan('Move task', [`Start ${q(t)} no earlier than ${fmtDate(day * 1440)}`], (p, cal) => {
       pick(p, t).constraint = { type: 'SNET', date: cal.nextWorkStart(startOfDay(day, cal)) };
     });
@@ -135,7 +226,7 @@ export function interpret(text, { project, computed }) {
       assignments.forEach(a => { if (!x.assignments.some(b => b.resourceId === a.resourceId)) x.assignments.push(a); });
     });
   }
-  return { kind: 'answer', text: `I didn't catch that yet. ${HELP.split('. ')[0]}.` };
+  return { kind: 'answer', unknown: true, text: `I didn't catch that yet. ${HELP.split('. ')[0]}.` };
 }
 
 function planAdd(rest, project) {
@@ -145,7 +236,7 @@ function planAdd(rest, project) {
   r = r.replace(new RegExp(`\\s(?:for |lasting |that takes |taking )?${NUM}[ -]?${UNIT}\\b`, 'i'), (x, n, u) => { d = durOf(n, u, project); return ' '; });
   r = r.replace(/\s(?:right\s+)?after\s+(.+?)(?=\s+(?:and|give|assign(?:ed)?|for)\b|\s*$)/i, (x, y) => { after = y; return ' '; });
   r = r.replace(/\s(?:and\s+)?(?:give it to|assign(?:ed)?(?: it)? to|for)\s+(.+?)\s*$/i, (x, y) => { who = clean(y); return ' '; });
-  let name = quoted ? quoted[1] : r.replace(/\b(?:a|an|the|new|task|milestone|called|named|and)\b/gi, ' ');
+  let name = quoted ? quoted[1] : r.replace(/\b(?:a|an|the|new|task|milestone|called|named|and|some|another|extra)\b/gi, ' ').replace(/^\s*(?:of|for)\s+/i, ' ');
   name = cap(clean(name.replace(/\s+/g, ' '))) || (milestone ? 'Milestone' : 'New task');
   const pred = after ? findTask(project, after) : null;
   if (after && !pred) return notFound(after);
@@ -213,6 +304,7 @@ export class Iguana {
     this.say(esc(text), 'user');
     const { project, computed } = this.app;
     const res = interpret(text, { project, computed });
+    if (res.as) this.say(`I read that as <b>“${esc(res.as)}”</b>.`);
     if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
     if (res.kind === 'answer') { this.say(esc(res.text)); return; }
     // Try the plan on a copy first, so the preview can say what will move.

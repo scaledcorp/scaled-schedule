@@ -7,7 +7,7 @@ import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
-import { interpret } from '../app/js/ui/iguana.js';
+import { interpret, readDay } from '../app/js/ui/iguana.js';
 
 const results = [];
 const test = (name, fn) => { try { fn(); results.push([name, true]); } catch (e) { results.push([name, false, e.message]); } };
@@ -218,6 +218,29 @@ test('Schedule Iguana: add, move, link and answer', () => {
   eq(interpret('when does the project finish?', ctx()).text, 'The project finishes Mon 1/25/27.');
   eq(interpret('why did launch move?', ctx()).text.includes('fixed date') || interpret('why did launch move?', ctx()).text.includes('waits for'), true);
   eq(interpret('make build 5 days', ctx()).lines[0], 'Make "Build" 5 days');
+});
+
+test('Schedule Iguana understands everyday wording', () => {
+  const p = mini([['Design', 2], ['Build', 3], ['Launch', 1]]);
+  p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
+  p.tasks[2].preds = [{ id: p.tasks[1].id, type: 'FS', lag: 0 }];
+  const ctx = { project: p, computed: schedule(p) };
+  const says = q => interpret(q, ctx);
+  const add = says('hey iguana, can we fit in three days of testing once build is done, Ana will handle it');
+  eq([add.kind, add.lines], ['plan', ['Add "Testing", 3 days, after "Build"', 'Assign Ana']]);
+  eq(says('launch needs to slide to jan 25 2027').lines, ['Start "Launch" no earlier than Mon 1/25/27']);
+  eq(says('push launch out to the 20th of jan 2027').kind === 'plan' || says('push launch out to jan 20 2027').kind === 'plan', true);
+  eq(says('what could make us miss the deadline?').text.startsWith('The critical path'), true);
+  eq(says("who's swamped right now").text, 'Nobody is over-booked.');
+  eq(says('design got wrapped up yesterday').lines, ['Mark "Design" 100% done']);
+  eq(says('build is going to take two weeks').lines, ['Make "Build" 10 days']);
+  eq(says('design has to happen before launch').lines[0].startsWith('Link "Design" to "Launch"'), true);
+  eq(says("launch can't start until build is done").lines[0].startsWith('Link "Build" to "Launch"'), true);
+  eq(says('drop the launch').lines, ['Delete "Launch"']);
+  eq(says('Ana will handle build').lines, ['Assign Ana to "Build"']);
+  eq(says("what's holding up launch?").text.includes('waits for "Build"'), true);
+  eq(says('when will we be done?').text.startsWith('The project finishes'), true);
+  eq(readDay('next monday', 2027, Math.round(Date.UTC(2027, 0, 6) / 86400000)), Math.round(Date.UTC(2027, 0, 11) / 86400000));
 });
 
 const pass = results.filter(r => r[1]).length;
