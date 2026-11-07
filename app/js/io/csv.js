@@ -148,6 +148,20 @@ function importJira(rows) {
   return { project, warnings };
 }
 
+// CSV for Inversion's "Import data" (inversion.jxzlabs.com): its own column names, so Title, ID and
+// Depends on map themselves; links are row IDs joined with "; " (Inversion splits on ; or |).
+export function exportInversionCSV(project, computed) {
+  const rowOf = new Map(project.tasks.map((t, i) => [t.id, i + 1]));
+  const resById = new Map(project.resources.map(r => [r.id, r]));
+  const out = [['ID', 'Title', 'Type', 'Start', 'End', 'Depends on', 'Resources', 'Notes']];
+  project.tasks.forEach((t, i) => {
+    const k = computed.byId.get(t.id);
+    out.push([i + 1, t.name, k.summary ? 'Phase' : t.milestone ? 'Milestone' : 'Task', isoDay(k.es), isoDay(k.ef),
+      t.preds.map(p => rowOf.get(p.id)).filter(Boolean).join('; '), formatAssignments(t, resById), t.notes]);
+  });
+  return toCSV(out);
+}
+
 // CSV for Jira's "Import issues from CSV": summary tasks become Epics, the rest Tasks, with
 // Issue Id / Parent Id so Jira rebuilds the hierarchy. Estimates are in seconds.
 export function exportJiraCSV(project, computed) {

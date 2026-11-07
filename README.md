@@ -57,6 +57,9 @@ account, and keeps your files on your own computer.
 - **Jira:** export your issues from Jira as CSV and open the file here (epics become summary tasks).
   Export → Jira (.csv) gives a file for Jira's "Import issues from CSV".
 - **ProjectLibre:** opens the Microsoft Project XML (it ignores holidays in that file).
+- **Inversion** (inversion.jxzlabs.com): Export → Inversion (.csv), then in Inversion press Ctrl+K,
+  choose Import data and pick the file. Tasks become nodes and links become connections. Inversion's
+  timeline export (Microsoft Project XML) opens here with its dates and durations.
 
 See [CONCEPT.md](CONCEPT.md) for the plan, the feature checklist and what's next.
 
