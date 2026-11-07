@@ -1,6 +1,6 @@
 // Microsoft Project XML (MSPDI). Microsoft Project opens it directly, ProjectLibre opens it, and
 // Primavera P6 Professional can import it.
-import { dateKey, DAY, keyToDay } from '../calendar.js';
+import { dateKey, DAY, keyToDay, WorkCalendar } from '../calendar.js';
 import { createResource, createTask, newProject, normalizeLevels } from '../model.js';
 
 const LINK_OUT = { FF: 0, FS: 1, SF: 2, SS: 3 };
@@ -180,8 +180,14 @@ export function importMSPDI(text) {
     .sort((p, q) => num(p, 'ID') - num(q, 'ID'));
   const uidMap = new Map();
   const pending = [];
+  const cal = new WorkCalendar(project.calendar);
   for (const el of taskEls) {
     const ms = txt(el, 'Milestone') === '1';
+    // Simpler exporters (Inversion's timeline, for one) give only Start and Finish: work the duration
+    // out from those, and keep the dates of unlinked tasks with a start-no-earlier-than constraint.
+    const s0 = parseDT(txt(el, 'Start')), f0 = parseDT(txt(el, 'Finish'));
+    const noDuration = !kid(el, 'Duration') && s0 != null && f0 != null;
+    const keepDate = !kid(el, 'ConstraintType') && !kids(el, 'PredecessorLink').length && s0 != null && s0 > (start ?? s0);
     const con = CON_IN[num(el, 'ConstraintType', 0)] || 'ASAP';
     const conDate = parseDT(txt(el, 'ConstraintDate'));
     const baseline = kids(el, 'Baseline').find(b => txt(b, 'Number') === '0');
@@ -196,6 +202,8 @@ export function importMSPDI(text) {
         duration: parseDur(txt(baseline, 'Duration', 'PT0H0M0S')), work: parseDur(txt(baseline, 'Work', 'PT0H0M0S')),
         cost: num(baseline, 'Cost', 0) } : null,
     });
+    if (noDuration && !ms) task.duration = Math.max(0, cal.workBetween(cal.nextWorkStart(s0), f0));
+    if (keepDate) task.constraint = { type: 'SNET', date: s0 };
     if (task.duration === 0 && !ms && txt(el, 'Summary') !== '1') task.milestone = true;
     project.tasks.push(task);
     uidMap.set(txt(el, 'UID'), task.id);

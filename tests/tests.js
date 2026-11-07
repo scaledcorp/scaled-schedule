@@ -6,7 +6,7 @@ import { hydrate } from '../app/js/store.js';
 import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
-import { exportCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
+import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
 
 const results = [];
 const test = (name, fn) => { try { fn(); results.push([name, true]); } catch (e) { results.push([name, false, e.message]); } };
@@ -175,6 +175,27 @@ test('CSV round trip and Jira import/export', () => {
   eq(j.tasks.map(t => [t.name, t.level, t.duration, t.percent]), [['Billing epic', 1, 480, 0], ['Invoice page', 2, 480, 100], ['Tax rules', 2, 960, 0]]);
   eq(j.resources[0].name, 'Ana Diaz');
   eq(exportJiraCSV(j, schedule(j)).split('\r\n')[2].startsWith('2,1,Invoice page,Task'), true);
+});
+
+test('Inversion CSV uses its column names and ; between links', () => {
+  const p = hydrate(SAMPLE), r = schedule(p);
+  const lines = exportInversionCSV(p, r).split('\r\n');
+  eq(lines[0], 'ID,Title,Type,Start,End,Depends on,Resources,Notes');
+  const multi = lines.find(l => /,"?\d+; \d+/.test(l));
+  if (!multi) throw new Error('no multi-link row joined with "; "');
+  eq(lines[1].startsWith('1,Sales and Scoping,Phase,2027-01-04,2027-01-28,'), true);
+});
+test('Project XML without durations (Inversion timeline export)', () => {
+  const xml = '<?xml version="1.0"?><Project xmlns="http://schemas.microsoft.com/project"><Name>Inv</Name>' +
+    '<StartDate>2027-01-04T08:00:00</StartDate><Tasks>' +
+    '<Task><UID>1</UID><ID>1</ID><Name>Plan</Name><Start>2027-01-04T08:00:00</Start><Finish>2027-01-08T17:00:00</Finish><Milestone>0</Milestone></Task>' +
+    '<Task><UID>2</UID><ID>2</ID><Name>Build</Name><Start>2027-01-11T08:00:00</Start><Finish>2027-01-12T17:00:00</Finish><Milestone>0</Milestone>' +
+    '<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type></PredecessorLink></Task>' +
+    '<Task><UID>3</UID><ID>3</ID><Name>Review</Name><Start>2027-01-20T08:00:00</Start><Finish>2027-01-20T17:00:00</Finish><Milestone>0</Milestone></Task>' +
+    '</Tasks></Project>';
+  const q = importMSPDI(xml).project, r = schedule(q);
+  eq(q.tasks.map(t => [t.duration / 480, t.milestone]), [[5, false], [2, false], [1, false]]);
+  eq(at(q, r, 2), ['2027-01-20T08:00', '2027-01-20T17:00']);
 });
 
 const pass = results.filter(r => r[1]).length;

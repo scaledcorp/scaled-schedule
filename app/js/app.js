@@ -9,7 +9,7 @@ import { deleteTasks, endOfDay, fmtDate, fmtHours, fmtMoney, formatDuration, ind
 import { SAMPLE } from './sample.js';
 import { exportMSPDI, importMSPDI } from './io/mspdi.js';
 import { exportXER } from './io/xer.js';
-import { exportCSV, exportJiraCSV, importCSV } from './io/csv.js';
+import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from './io/csv.js';
 
 const P = {
   open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
@@ -270,7 +270,8 @@ class App {
       c('undo', 'Undo', 'Ctrl+Z'), c('redo', 'Redo', 'Ctrl+Y'),
       c('new', 'New project'), c('open', 'Open a file', 'Ctrl+O'), c('save', 'Save', 'Ctrl+S'), c('saveAs', 'Save as'),
       c('exportMSPDI', 'Export to Microsoft Project (XML)'), c('exportXER', 'Export to Primavera P6 (XER)'),
-      c('exportCSV', 'Export to CSV'), c('exportJira', 'Export for Jira (CSV)'), c('sample', 'Open the sample project'),
+      c('exportCSV', 'Export to CSV'), c('exportJira', 'Export for Jira (CSV)'), c('exportInversion', 'Export for Inversion (CSV)'),
+      c('sample', 'Open the sample project'),
       c('critical', 'Show or hide the critical path'), c('saveBaseline', 'Save a baseline'), c('toggleBaseline', 'Show or hide the baseline'),
       c('zoomIn', 'Zoom in'), c('zoomOut', 'Zoom out'), c('scrollToTask', 'Scroll to the selected task'),
       c('collapseAll', 'Collapse all summaries'), c('expandAll', 'Expand all summaries'),
@@ -317,6 +318,7 @@ class App {
         { label: 'Microsoft Project (.xml)', hint: 'Opens in Project; P6 and ProjectLibre can import it', run: () => this.run('exportMSPDI') },
         { label: 'Primavera P6 (.xer)', hint: 'Import in P6 Professional', run: () => this.run('exportXER') },
         { label: 'Jira (.csv)', hint: "For Jira's Import issues from CSV", run: () => this.run('exportJira') },
+        { label: 'Inversion (.csv)', hint: "For Inversion's Import data", run: () => this.run('exportInversion') },
         { label: 'Spreadsheet (.csv)', hint: 'Excel, Google Sheets', run: () => this.run('exportCSV') },
         { label: 'Print or save as PDF', hint: '', run: () => this.run('print') },
       ]);
@@ -328,6 +330,7 @@ class App {
       }
       case 'exportCSV': return this.download(`${safeName(project.name)}.csv`, exportCSV(project, this.computed), 'text/csv', 'CSV');
       case 'exportJira': return this.download(`${safeName(project.name)} for Jira.csv`, exportJiraCSV(project, this.computed), 'text/csv', 'Jira CSV');
+      case 'exportInversion': return this.download(`${safeName(project.name)} for Inversion.csv`, exportInversionCSV(project, this.computed), 'text/csv', 'Inversion CSV');
       case 'sample': {
         if (store.dirty && project.tasks.length && !(await ask('Open the sample project?', 'Your current project is autosaved in this browser, but not saved to a file.', [{ label: 'Cancel', value: false }, { label: 'Open sample', value: true, primary: true }]))) return;
         store.load(structuredClone(SAMPLE));
