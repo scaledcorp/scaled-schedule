@@ -49,6 +49,7 @@ Status: **v0.1** = in the first build, **next** = planned soon, **later** = on t
 - [next] Network diagram, resource usage view, column chooser, filters (critical, late, milestones)
 - [next] Print and PDF export of the Gantt
 - [later] Large-schedule virtualization (5,000+ tasks)
+- [v0.2] Install as an app from Edge or Chrome: own window, works offline, `.sched` files open with a double-click
 
 ### Moving schedules in and out
 - [v0.1] Microsoft Project XML (MSPDI) export and import. Project opens it directly; P6 Professional can import it too.
