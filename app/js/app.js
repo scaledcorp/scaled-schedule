@@ -25,8 +25,9 @@ const P = {
   scrollToTask: 'M4 12h10M10 8l4 4-4 4M19 5v14', critical: 'M13 3 5 14h6l-1 7 8-11h-6z',
   settings: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4',
   theme: 'M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z', palette: 'M5 8l4 4-4 4M11 16h8',
+  install: 'M12 4v11M7 10l5 5 5-5M5 20h14',
 };
-const LABELS = { open: 'Open', save: 'Save', exportMenu: 'Export', addTask: 'Task' };
+const LABELS = { open: 'Open', save: 'Save', exportMenu: 'Export', addTask: 'Task', install: 'Install' };
 const icon = k => `<svg viewBox="0 0 24 24"><path d="${P[k]}"/></svg>`;
 const safeName = s => (s || 'schedule').replace(/[\\/:*?"<>|]+/g, '').trim() || 'schedule';
 
@@ -65,6 +66,28 @@ class App {
     if (saved) { this.store.load(saved.project, { fileName: saved.fileName }); if (saved.project.tasks.length) this.toast('Picked up where you left off'); }
     else this.render();
     this.focusGrid();
+    this.installable();
+  }
+
+  // Installed like a desktop app (Edge, Chrome): works offline, and Windows can open .sched files
+  // with a double-click. Windows hands those files to us through the launch queue.
+  installable() {
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      navigator.serviceWorker.register('sw.js').catch(() => { /* offline support is optional */ });
+    }
+    const btn = document.querySelector('[data-cmd="install"]');
+    addEventListener('beforeinstallprompt', e => { e.preventDefault(); this.installPrompt = e; btn.hidden = false; });
+    addEventListener('appinstalled', () => {
+      this.installPrompt = null;
+      btn.hidden = true;
+      this.toast('Installed. Double-click a .sched file to open it here.');
+    });
+    if ('launchQueue' in window) {
+      launchQueue.setConsumer(async params => {
+        const handle = params.files?.[0];
+        if (handle) this.openFile(await handle.getFile(), handle);
+      });
+    }
   }
 
   get project() { return this.store.project; }
@@ -253,6 +276,7 @@ class App {
       c('collapseAll', 'Collapse all summaries'), c('expandAll', 'Expand all summaries'),
       c('viewGantt', 'Show the Gantt view'), c('viewResources', 'Show the resource sheet'),
       c('settings', 'Project and calendar settings'), c('theme', 'Switch light or dark'), c('print', 'Print'),
+      c('install', 'Install as an app (open .sched files with a double-click)'),
     ];
   }
 
@@ -336,6 +360,14 @@ class App {
         return;
       }
       case 'palette': return openPalette(this);
+      case 'install': {
+        if (matchMedia('(display-mode: standalone)').matches) return this.toast("You're already in the installed app.");
+        if (!this.installPrompt) return this.toast('To install, open this page in Edge or Chrome and use the install icon in the address bar.');
+        this.installPrompt.prompt();
+        const { outcome } = await this.installPrompt.userChoice;
+        if (outcome === 'accepted') this.installPrompt = null;
+        return;
+      }
       case 'print': return window.print();
     }
   }

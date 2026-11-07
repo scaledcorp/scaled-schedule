@@ -11,6 +11,15 @@ account, and keeps your files on your own computer.
   `python -m http.server 5080` in this folder and open http://localhost:5080/app/.
 - **Tests:** open http://localhost:5080/tests/ (engine, calendar, outline edits and every file format).
 
+### Install it like a desktop app (Edge or Chrome)
+
+1. Open https://scaledcorp.github.io/scaled-schedule/app/ in Edge or Chrome.
+2. Click **Install** in the toolbar (or the install icon in the address bar).
+3. scaled Schedule gets its own window and Start menu icon, and works offline.
+4. Double-click any `.sched` file. The first time, Windows asks which app to use, or the app asks
+   permission to open `.sched` files: choose scaled Schedule and allow it. After that, `.sched` files
+   open straight into the app, and Ctrl+S saves back to the same file.
+
 ## What it does today (v0.1)
 
 - Tasks, summary tasks and milestones; durations in hours, days, weeks or months

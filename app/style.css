@@ -66,6 +66,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn.primary:hover { background: var(--azure); filter: brightness(1.08); }
 .btn.on { background: var(--azure-soft); color: var(--azure); }
 .btn[disabled] { opacity: .4; pointer-events: none; }
+.btn[hidden] { display: none; }
 .seg { display: inline-flex; padding: 3px; background: var(--pane-2); border: 1px solid var(--line-soft); border-radius: 12px; gap: 2px; }
 .seg .btn { height: 28px; border-radius: 9px; }
 .seg .btn.on { background: var(--pane); color: var(--ink); box-shadow: var(--shadow); }
