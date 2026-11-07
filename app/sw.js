@@ -1,6 +1,6 @@
 // Offline support: always try the network first so updates show up right away, and fall back to the
 // last copy saved here when there's no connection. Bump VERSION when the file list changes.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `scaled-schedule-${VERSION}`;
 const CORE = [
   './', 'index.html', 'style.css', 'favicon.svg', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
@@ -18,11 +18,21 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 
+// Cross-origin isolation lets Schedule Iguana's AI use every processor core. GitHub Pages can't send
+// these headers, so the service worker adds them. "credentialless" still allows fonts and model downloads.
+function isolate(res) {
+  if (!res || res.type === 'opaque' || res.status === 0) return res;
+  const headers = new Headers(res.headers);
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(fetch(e.request).then(res => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
-    return res;
-  }).catch(() => caches.match(e.request, { ignoreSearch: true })));
+    return isolate(res);
+  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(isolate)));
 });
