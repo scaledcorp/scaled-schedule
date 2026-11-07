@@ -1,3 +1,6 @@
+# offline package build output and the downloaded model (too big for git)
+dist/
+app/models/
 # personal schedules and exports
 *.sched
 *.xer

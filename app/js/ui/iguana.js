@@ -5,6 +5,7 @@ import { deleteTasks, fmtDate, fmtHours, fmtMoney, formatDuration, insertTask, p
   parseDuration, startOfDay, subtreeEnd, yearOf } from '../model.js';
 import { schedule } from '../scheduler.js';
 import { setPercent } from './panels.js';
+import { Brain } from '../ai/brain.js';
 
 const NUM = '(\\d+(?:\\.\\d+)?)';
 const UNIT = '(minutes?|mins?|hours?|hrs?|h|days?|d|weeks?|wks?|w|months?|mo)';
@@ -135,7 +136,7 @@ export function interpret(text, { project, computed }) {
       assignments.forEach(a => { if (!x.assignments.some(b => b.resourceId === a.resourceId)) x.assignments.push(a); });
     });
   }
-  return { kind: 'answer', text: `I didn't catch that yet. ${HELP.split('. ')[0]}.` };
+  return { kind: 'answer', unknown: true, text: `I didn't catch that yet. ${HELP.split('. ')[0]}.` };
 }
 
 function planAdd(rest, project) {
@@ -193,6 +194,7 @@ export class Iguana {
       else if (act === 'undo') { this.app.store.undo(); this.say('Undone.'); }
     };
     this.pending = [];
+    this.brain = new Brain();
     this.say("Hi, I'm Schedule Iguana. Tell me what to change, like \"add a 3-day testing task after Build\", or ask \"what's on the critical path?\" I show you the plan before I touch anything.");
   }
 
@@ -208,11 +210,27 @@ export class Iguana {
     return el;
   }
 
-  handle(text) {
+  // mode: 'user' (typed or a chip), 'retry' (after the brain download; don't repeat the message)
+  async handle(text, mode = 'user') {
     if (!text.trim()) return;
-    this.say(esc(text), 'user');
+    if (mode === 'user') this.say(esc(text), 'user');
     const { project, computed } = this.app;
-    const res = interpret(text, { project, computed });
+    let res = interpret(text, { project, computed });
+    if (res.unknown) {
+      // The rules didn't recognize the wording: let the small model rewrite it into a known phrasing.
+      if (!this.brain.ready && !(await this.brain.known())) { this.offerBrain(text); return; }
+      const think = this.say('<span class="ig-dots"><i></i><i></i><i></i></span>');
+      try {
+        if (!this.brain.ready) await this.brain.load(p => { think.innerHTML = `Waking up… ${Math.round(p.progress * 100)}%`; });
+        const { command } = await this.brain.rewrite(text, this.app.project);
+        think.remove();
+        const again = interpret(command, { project: this.app.project, computed: this.app.computed });
+        if (command.toLowerCase() === 'help' || again.unknown) { this.say(esc(res.text)); return; }
+        this.say(`I read that as <b>“${esc(command)}”</b>.`);
+        res = again;
+        text = command;
+      } catch (e) { think.remove(); this.say(esc(`My AI brain hit a snag: ${e.message}`)); return; }
+    }
     if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
     if (res.kind === 'answer') { this.say(esc(res.text)); return; }
     // Try the plan on a copy first, so the preview can say what will move.
@@ -225,6 +243,26 @@ export class Iguana {
     const i = this.pending.push({ ...res, text }) - 1;
     this.say(`<p>Here's what I'll do:</p><ul>${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
       <div class="ig-acts"><button class="btn primary" data-act="do" data-i="${i}">Do it</button><button class="btn" data-act="change" data-i="${i}">Change</button></div>`);
+  }
+
+  // First time only: ask before downloading the model, then show progress and retry the request.
+  offerBrain(text) {
+    const el = this.say(`<p>I don't know that wording yet. My AI brain can figure it out: a small Qwen model that runs right here on
+      this computer, nothing sent anywhere. It's a one-time download of about 0.5 GB.</p>
+      <div class="ig-acts"><button class="btn primary" data-brain="yes">Download my brain</button><button class="btn" data-brain="no">Not now</button></div>`);
+    el.querySelector('[data-brain="no"]').onclick = () => { el.querySelectorAll('button').forEach(b => { b.disabled = true; }); this.say('No problem. Try the phrasings in "What can you do?".'); };
+    el.querySelector('[data-brain="yes"]').onclick = async () => {
+      el.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      const bar = this.say('<div class="ig-bar"><i style="width:0%"></i></div><small>Starting download…</small>');
+      try {
+        const r = await this.brain.load(p => {
+          bar.querySelector('i').style.width = `${Math.round(p.progress * 100)}%`;
+          bar.querySelector('small').textContent = `${p.loadedMB} of ${p.totalMB} MB`;
+        });
+        bar.innerHTML = `Brain ready (${r.device === 'webgpu' ? 'using the graphics chip' : 'using the processor'}). Let me try that again.`;
+        this.handle(text, 'retry');
+      } catch (e) { bar.innerHTML = esc(`The download didn't finish: ${e.message}`); }
+    };
   }
 
   run(i) {
