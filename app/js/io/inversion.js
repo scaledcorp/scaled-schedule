@@ -9,7 +9,8 @@ const W = 200, H = 84, COL = 240, ROW = 130, PER_ROW = 4, PAD = 30;   // Inversi
 export function exportInversionModel(project, computed, now = new Date().toISOString()) {
   const uuid = () => crypto.randomUUID();
   const modelId = uuid();
-  const stamp = { createdAt: now, createdBy: 'scaled Schedule', updatedAt: now, updatedBy: 'scaled Schedule' };
+  // Same bookkeeping fields Inversion writes on its own nodes and connections.
+  const stamp = { rev: 1, createdAt: now, createdBy: 'scaled Schedule', updatedAt: now, updatedBy: 'scaled Schedule' };
   const type = (name, glyph, color, fields, isBuiltin = true) => ({ id: uuid(), modelId, name, glyph, color, fields, isBuiltin });
   const goal = type('Goal', 'G', '#22c55e', [
     { id: 'goal.successCriteria', label: 'Success criteria', kind: 'textarea' },
@@ -86,14 +87,16 @@ export function exportInversionModel(project, computed, now = new Date().toISOSt
   project.tasks.forEach(t => t.preds.forEach(p => {
     const sourceId = nodeOf.get(t.id), targetId = nodeOf.get(p.id);
     if (sourceId && targetId && sourceId !== targetId) {
-      connections.push({ id: uuid(), modelId, typeId: requires.id, sourceId, targetId, properties: {}, ...stamp });
+      connections.push({ id: uuid(), modelId, typeId: requires.id, sourceId, targetId, sourcePort: null, targetPort: null,
+        description: null, openLabel: null, properties: {}, ...stamp });
     }
   }));
 
   const model = {
     schemaVersion: 1,
     model: { id: modelId, name: project.name, settings: { defaultConnectionTypeId: requires.id,
-      boundaryConnectionTypeId: connectionTypes[1].id }, ...stamp },
+      boundaryConnectionTypeId: connectionTypes[1].id },
+      createdAt: now, createdBy: 'scaled Schedule', updatedAt: now, updatedBy: 'scaled Schedule' },
     nodeTypes, connectionTypes, nodes, connections,
   };
   return JSON.stringify({ format: 'inversion.model', formatVersion: 1,
