@@ -7,6 +7,7 @@ import { deleteTasks, endOfDay, fmtDate, fmtHours, fmtMoney, formatDuration, ind
   linkTasks, moveBlock, newProject, outdent, parseAssignments, parseDay, parseDuration, parsePreds, startOfDay,
   subtreeEnd, unlinkTasks, yearOf } from './model.js';
 import { SAMPLE } from './sample.js';
+import { Iguana } from './ui/iguana.js';
 import { exportMSPDI, importMSPDI } from './io/mspdi.js';
 import { exportXER } from './io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from './io/csv.js';
@@ -67,6 +68,7 @@ class App {
     else this.render();
     this.focusGrid();
     this.installable();
+    this.iguana = new Iguana(this);
   }
 
   // Installed like a desktop app (Edge, Chrome): works offline, and Windows can open .sched files
@@ -278,6 +280,7 @@ class App {
       c('viewGantt', 'Show the Gantt view'), c('viewResources', 'Show the resource sheet'),
       c('settings', 'Project and calendar settings'), c('theme', 'Switch light or dark'), c('print', 'Print'),
       c('install', 'Install as an app (open .sched files with a double-click)'),
+      c('iguana', 'Ask Schedule Iguana'),
     ];
   }
 
@@ -363,6 +366,7 @@ class App {
         return;
       }
       case 'palette': return openPalette(this);
+      case 'iguana': return this.iguana.open();
       case 'install': {
         if (matchMedia('(display-mode: standalone)').matches) return this.toast("You're already in the installed app.");
         if (!this.installPrompt) return this.toast('To install, open this page in Edge or Chrome and use the install icon in the address bar.');

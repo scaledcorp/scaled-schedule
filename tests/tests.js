@@ -7,6 +7,7 @@ import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
+import { interpret, readDay } from '../app/js/ui/iguana.js';
 
 const results = [];
 const test = (name, fn) => { try { fn(); results.push([name, true]); } catch (e) { results.push([name, false, e.message]); } };
@@ -196,6 +197,50 @@ test('Project XML without durations (Inversion timeline export)', () => {
   const q = importMSPDI(xml).project, r = schedule(q);
   eq(q.tasks.map(t => [t.duration / 480, t.milestone]), [[5, false], [2, false], [1, false]]);
   eq(at(q, r, 2), ['2027-01-20T08:00', '2027-01-20T17:00']);
+});
+
+test('Schedule Iguana: add, move, link and answer', () => {
+  const p = mini([['Design', 2], ['Build', 3], ['Launch', 1]]);
+  p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
+  p.tasks[2].preds = [{ id: p.tasks[1].id, type: 'FS', lag: 0 }];
+  const ctx = () => ({ project: p, computed: schedule(p) });
+  const add = interpret('add a 3-day testing task after Build and give it to Ana Diaz', ctx());
+  eq(add.kind, 'plan');
+  add.run(p, ctx().computed.calendar, ctx().computed);
+  eq(p.tasks.map(t => t.name), ['Design', 'Build', 'Testing', 'Launch']);
+  eq([p.tasks[2].duration, p.tasks[2].preds[0].id, p.resources[0].name], [1440, p.tasks[1].id, 'Ana Diaz']);
+  interpret('link testing to launch', ctx()).run(p);
+  eq(p.tasks[3].preds.length, 2);
+  interpret('move Launch to Jan 25 2027', ctx()).run(p, ctx().computed.calendar);
+  eq(show(schedule(p).byId.get(p.tasks[3].id).es), '2027-01-25T08:00');
+  const crit = interpret("what's on the critical path?", ctx()).text;
+  eq([crit.includes('"Launch"'), crit.includes('"Design"')], [true, false]);
+  eq(interpret('when does the project finish?', ctx()).text, 'The project finishes Mon 1/25/27.');
+  eq(interpret('why did launch move?', ctx()).text.includes('fixed date') || interpret('why did launch move?', ctx()).text.includes('waits for'), true);
+  eq(interpret('make build 5 days', ctx()).lines[0], 'Make "Build" 5 days');
+});
+
+test('Schedule Iguana understands everyday wording', () => {
+  const p = mini([['Design', 2], ['Build', 3], ['Launch', 1]]);
+  p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
+  p.tasks[2].preds = [{ id: p.tasks[1].id, type: 'FS', lag: 0 }];
+  const ctx = { project: p, computed: schedule(p) };
+  const says = q => interpret(q, ctx);
+  const add = says('hey iguana, can we fit in three days of testing once build is done, Ana will handle it');
+  eq([add.kind, add.lines], ['plan', ['Add "Testing", 3 days, after "Build"', 'Assign Ana']]);
+  eq(says('launch needs to slide to jan 25 2027').lines, ['Start "Launch" no earlier than Mon 1/25/27']);
+  eq(says('push launch out to the 20th of jan 2027').kind === 'plan' || says('push launch out to jan 20 2027').kind === 'plan', true);
+  eq(says('what could make us miss the deadline?').text.startsWith('The critical path'), true);
+  eq(says("who's swamped right now").text, 'Nobody is over-booked.');
+  eq(says('design got wrapped up yesterday').lines, ['Mark "Design" 100% done']);
+  eq(says('build is going to take two weeks').lines, ['Make "Build" 10 days']);
+  eq(says('design has to happen before launch').lines[0].startsWith('Link "Design" to "Launch"'), true);
+  eq(says("launch can't start until build is done").lines[0].startsWith('Link "Build" to "Launch"'), true);
+  eq(says('drop the launch').lines, ['Delete "Launch"']);
+  eq(says('Ana will handle build').lines, ['Assign Ana to "Build"']);
+  eq(says("what's holding up launch?").text.includes('waits for "Build"'), true);
+  eq(says('when will we be done?').text.startsWith('The project finishes'), true);
+  eq(readDay('next monday', 2027, Math.round(Date.UTC(2027, 0, 6) / 86400000)), Math.round(Date.UTC(2027, 0, 11) / 86400000));
 });
 
 const pass = results.filter(r => r[1]).length;
