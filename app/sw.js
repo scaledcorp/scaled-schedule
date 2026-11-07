@@ -5,7 +5,7 @@ const CACHE = `scaled-schedule-${VERSION}`;
 const CORE = [
   './', 'index.html', 'style.css', 'favicon.svg', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   'js/app.js', 'js/calendar.js', 'js/model.js', 'js/scheduler.js', 'js/store.js', 'js/sample.js',
-  'js/io/mspdi.js', 'js/io/xer.js', 'js/io/csv.js', 'js/ui/grid.js', 'js/ui/gantt.js', 'js/ui/panels.js', 'js/ui/iguana.js', 'iguana.svg',
+  'js/io/mspdi.js', 'js/io/xer.js', 'js/io/csv.js', 'js/io/inversion.js', 'js/ui/grid.js', 'js/ui/gantt.js', 'js/ui/panels.js', 'js/ui/iguana.js', 'iguana.svg',
 ];
 
 self.addEventListener('install', e => {

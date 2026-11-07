@@ -8,6 +8,7 @@ import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
 import { interpret, readDay } from '../app/js/ui/iguana.js';
+import { exportInversionModel } from '../app/js/io/inversion.js';
 
 const results = [];
 const test = (name, fn) => { try { fn(); results.push([name, true]); } catch (e) { results.push([name, false, e.message]); } };
@@ -241,6 +242,22 @@ test('Schedule Iguana understands everyday wording', () => {
   eq(says("what's holding up launch?").text.includes('waits for "Build"'), true);
   eq(says('when will we be done?').text.startsWith('The project finishes'), true);
   eq(readDay('next monday', 2027, Math.round(Date.UTC(2027, 0, 6) / 86400000)), Math.round(Date.UTC(2027, 0, 11) / 86400000));
+});
+
+test('Inversion model JSON: phases as clusters, goals, tasks and requires links', () => {
+  const p = hydrate(SAMPLE), r = schedule(p);
+  const f = JSON.parse(exportInversionModel(p, r, '2026-11-07T00:00:00.000Z'));
+  eq([f.format, f.formatVersion, f.model.schemaVersion], ['inversion.model', 1, 1]);
+  const m = f.model, ids = new Set(m.nodes.map(n => n.id));
+  const type = id => m.nodeTypes.find(t => t.id === id)?.name ?? null;
+  eq(m.nodes.length, p.tasks.length);
+  eq(m.nodes.filter(n => n.cluster).length, r.tasks.filter((k, i) => k.summary && p.tasks[i].level === 1).length);
+  eq(m.nodes.filter(n => type(n.typeId) === 'Goal').length, p.tasks.filter(t => t.milestone).length);
+  eq(m.connections.length, p.tasks.reduce((s, t) => s + t.preds.length, 0));
+  eq(m.connections.every(c => ids.has(c.sourceId) && ids.has(c.targetId)), true);
+  eq(m.nodes.filter(n => n.containerId).every(n => m.nodes.find(x => x.id === n.containerId)?.cluster), true);
+  const build = m.nodes.find(n => n.title === 'Client review and contract');
+  eq([type(build.typeId), build.properties['task.start'], build.properties['task.end']], ['Task', '2027-01-19', '2027-01-28']);
 });
 
 const pass = results.filter(r => r[1]).length;
