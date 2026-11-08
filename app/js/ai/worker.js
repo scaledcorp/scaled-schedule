@@ -43,7 +43,11 @@ async function ask(id, messages, maxTokens = 48) {
   if (!generator) await load(id);
   const t0 = performance.now();
   const out = await generator(messages, { max_new_tokens: maxTokens, do_sample: false, return_full_text: false });
-  const text = (out[0]?.generated_text?.at?.(-1)?.content ?? out[0]?.generated_text ?? '').toString();
+  // Chat output can come back as a message list or as raw text that still carries the role header
+  // ("assistant"); keep only what the model actually answered.
+  const g = out[0]?.generated_text;
+  let text = Array.isArray(g) ? String(g.at(-1)?.content ?? '') : String(g ?? '');
+  text = text.split(/<\|end_header_id\|>|\bassistant\b\s*\n+/i).pop().replace(/<\|eot_id\|>[\s\S]*$/, '');
   post(id, { text: text.trim(), ms: Math.round(performance.now() - t0) });
 }
 

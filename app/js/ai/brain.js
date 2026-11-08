@@ -76,9 +76,9 @@ export class Brain {
     const hits = project.tasks.map(t => t.name).filter(n => (n.toLowerCase().match(/[a-z0-9]{3,}/g) || []).some(w => words.has(w)));
     const names = (hits.length ? hits : project.tasks.map(t => t.name)).slice(0, 8).join('; ');
     const messages = [{ role: 'system', content: `${SYSTEM}\n\nTask names: ${names || '(none yet)'}` }];
-    EXAMPLES.slice(0, 5).forEach(([u, a]) => messages.push({ role: 'user', content: u }, { role: 'assistant', content: a }));
+    EXAMPLES.slice(0, 3).forEach(([u, a]) => messages.push({ role: 'user', content: u }, { role: 'assistant', content: a }));
     messages.push({ role: 'user', content: text });
-    const r = await this.call('ask', { messages, maxTokens: 40 });
+    const r = await this.call('ask', { messages, maxTokens: 24 });
     return { command: r.text.split('\n')[0].replace(/^["'`]+|["'`]+$/g, '').trim(), ms: r.ms };
   }
 }
