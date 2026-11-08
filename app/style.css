@@ -277,6 +277,11 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0
   color: var(--muted); cursor: pointer; transition: transform .18s var(--spring), border-color .15s, color .15s; }
 .ig-chips button:hover { border-color: #12B886; color: var(--ink); }
 .ig-chips button:active { transform: scale(.94); }
+.ig-sugg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ig-sugg button { border: 1px solid #12B886; background: var(--pane); color: var(--ink); border-radius: 999px; padding: 5px 11px;
+  font-size: 12.5px; cursor: pointer; transition: transform .18s var(--spring), background .15s; }
+.ig-sugg button:hover { background: rgba(18,184,134,.12); }
+.ig-sugg button:active { transform: scale(.94); }
 .ig-input { display: flex; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
 .ig-input input { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; background: var(--pane); }
 .ig-input input:focus { outline: none; border-color: #12B886; box-shadow: 0 0 0 3px rgba(18,184,134,.25); }
