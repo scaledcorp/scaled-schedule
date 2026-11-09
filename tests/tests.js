@@ -6,12 +6,18 @@ import { hydrate } from '../app/js/store.js';
 import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
+import { importP6XML, importXER } from '../app/js/io/p6.js';
+import { importXLSX } from '../app/js/io/xlsx.js';
+import { decodeText } from '../app/js/io/files.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
 import { coach, Iguana, interpret, readDay } from '../app/js/ui/iguana.js';
 import { exportInversionModel } from '../app/js/io/inversion.js';
 
 const results = [];
-const test = (name, fn) => { try { fn(); results.push([name, true]); } catch (e) { results.push([name, false, e.message]); } };
+const pending = [];
+const test = (name, fn) => pending.push((async () => {
+  try { await fn(); results.push([name, true]); } catch (e) { results.push([name, false, e.message]); }
+})());
 const eq = (a, b, msg = '') => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg} expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); };
 const T = (y, mo, d, h = 0, mi = 0) => Date.UTC(y, mo - 1, d, h, mi) / 60000;
 const show = t => new Date(t * 60000).toISOString().slice(0, 16);
@@ -430,6 +436,90 @@ test('Schedule Iguana: what-if, finish sooner, typos, corrections and project co
   eq([st.report.split('\n')[0], st.report.includes('Progress: 46% complete'), st.report.includes('In progress: Build (50%)')], ['Status as of Fri 1/22/27', true, true]);
 });
 
+// ---------------------------------------------------------------- dropping in schedule files
+// The test files in tests/files are one small project, Pump House Upgrade, saved as a P6 XER (in
+// the Windows encoding P6 uses, with its calendar quirks and a second project), a P6 XML, and an
+// Excel sheet laid out like P6's "Export to Excel" with a title row and indented names.
+const fixture = async f => (await fetch(`files/${f}`)).arrayBuffer();
+const files = Promise.all(['pump-house.xer', 'pump-house-p6.xml', 'pump-house.xlsx'].map(fixture));
+const rowsOf = p => {
+  const r = schedule(p), row = id => p.tasks.findIndex(t => t.id === id) + 1;
+  return p.tasks.map(t => [t.level, t.name, t.duration / 480, t.milestone, Math.round(t.percent), t.constraint.type,
+    t.preds.map(x => `${row(x.id)}${x.type}${x.lag ? `+${x.lag / 480}` : ''}`).join(','), show(r.byId.get(t.id).ef)].join(' | '));
+};
+const PUMP_HOUSE = [
+  '1 | Engineering | 1 | false | 0 | ASAP |  | 2027-02-05T17:00',
+  '2 | Notice to proceed | 0 | true | 100 | ASAP |  | 2027-01-04T08:00',
+  '2 | Design pump skid | 10 | false | 100 | ASAP | 2FS | 2027-01-15T17:00',
+  '2 | Procure pumps | 15 | false | 33 | ASAP | 3FS | 2027-02-05T17:00',
+  '1 | Project management | 30 | false | 33 | ASAP |  | 2027-02-12T17:00',
+  '1 | Construction | 1 | false | 0 | ASAP |  | 2027-02-19T17:00',
+  '2 | Mechanical | 1 | false | 0 | ASAP |  | 2027-02-18T17:00',
+  '3 | Demolish old skid | 5 | false | 0 | ASAP | 4SS+5 | 2027-01-29T17:00',
+  '3 | Set new pumps | 4 | false | 0 | ASAP | 4FS,8FS | 2027-02-11T17:00',
+  '3 | Pipe and wire – Unit 2 | 6 | false | 0 | ASAP | 9SS+2 | 2027-02-18T17:00',
+  '2 | Test and turnover | 3 | false | 0 | FNLT | 9FS,10FF+1 | 2027-02-19T17:00',
+  '1 | Ready for service | 0 | true | 0 | ASAP | 11FS | 2027-02-19T17:00',
+];
+test('P6 XER import: WBS, links, progress, calendar, resources', async () => {
+  const [xer] = await files;
+  const { project: p, warnings } = importXER(decodeText(xer));
+  eq(p.name, 'Pump House Upgrade');
+  eq(rowsOf(p), PUMP_HOUSE);
+  eq([p.calendar.week[1], p.calendar.exceptions.map(e => e.date)], [[[480, 720], [780, 1020]], ['2027-02-15']]);
+  eq(p.resources.map(r => [r.name, r.type, r.rate]), [['Mechanical crew', 'work', 95], ['Pump set', 'material', 0]]);
+  eq(p.tasks[8].assignments.length, 2);
+  eq(warnings, ['This file holds 2 projects. Opened PHU-2027, the largest.', 'Activities use 2 calendars. They all use "Standard 5 Day" here.',
+    '1 level-of-effort or WBS summary activity came in as normal tasks.', '1 link to activities outside this project was left out.']);
+  // exporting back to XER keeps P6's Activity IDs
+  const back = importXER(exportXER(p, schedule(p)).text).project;
+  eq(back.tasks.filter(t => t.activityId).map(t => t.activityId).slice(0, 3), ['A1000', 'A1010', 'A1020']);
+  eq(show(schedule(back).finish), '2027-02-19T17:00');
+});
+test('P6 XML import matches the XER', async () => {
+  const [, xml] = await files;
+  const { project: p, warnings } = importP6XML(decodeText(xml));
+  eq(rowsOf(p), PUMP_HOUSE);
+  eq(p.calendar.exceptions.map(e => e.date), ['2027-02-15']);
+  eq(warnings.length, 2);
+});
+test('Excel import: title row, indented names, dates, percents, links by Activity ID', async () => {
+  const [, , xlsx] = await files;
+  const { project: p } = await importXLSX(xlsx, 'pump-house.xlsx');
+  eq(p.name, 'pump-house');
+  const rows = rowsOf(p);
+  eq(rows.length, 12);
+  eq([rows[0], rows[2], rows[7], rows[9]], [
+    '1 | Project management | 30 | false | 33 | SNET |  | 2027-02-12T17:00',
+    '2 | Notice to proceed | 0 | true | 100 | SNET |  | 2027-01-04T08:00',
+    '3 | Demolish old skid | 5 | false | 0 | ASAP | 5SS+5 | 2027-01-29T17:00',
+    '3 | Pipe and wire – Unit 2 | 6 | false | 0 | ASAP | 9SS+2 | 2027-02-17T17:00']);
+  // a spreadsheet has no holiday calendar, so the finish lands a day earlier than in P6
+  eq(show(schedule(p).finish), '2027-02-18T17:00');
+});
+test('CSV with only start and finish dates, P6 style', () => {
+  const csv = 'Activity ID,Activity Name,Start,Finish,Predecessors\r\nA10,Survey,04-Jan-27 A,08-Jan-27 A,\r\n' +
+    'A20,Grade,11-Jan-27,20-Jan-27,A10\r\nA30,Pour,21-Jan-27,21-Jan-27,"A20FS+1d"\r\n';
+  const { project: p } = importCSV(csv);
+  eq(p.tasks.map(t => [t.activityId, t.duration / 480, t.preds.length]), [['A10', 5, 0], ['A20', 8, 1], ['A30', 1, 1]]);
+  eq(p.tasks[2].preds[0].lag, 480);
+  eq(show(p.start), '2027-01-04T08:00');
+});
+test('every reader runs offline: no network while importing', async () => {
+  const all = await files;
+  const before = performance.getEntriesByType('resource').length;
+  const realFetch = window.fetch;
+  let calls = 0;
+  window.fetch = () => { calls++; throw new Error('network used'); };
+  try {
+    importXER(decodeText(all[0]));
+    importP6XML(decodeText(all[1]));
+    await importXLSX(all[2], 'x.xlsx');
+  } finally { window.fetch = realFetch; }
+  eq([calls, performance.getEntriesByType('resource').length - before], [0, 0]);
+});
+
+await Promise.all(pending);
 const pass = results.filter(r => r[1]).length;
 document.getElementById('summary').textContent = `${pass} of ${results.length} passed`;
 document.getElementById('summary').className = pass === results.length ? 'ok' : 'bad';

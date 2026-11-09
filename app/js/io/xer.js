@@ -96,7 +96,12 @@ export function exportXER(project, computed) {
 
   // activities
   const leaves = project.tasks.filter(t => !c.get(t.id).summary);
-  const taskRows = leaves.map((t, i) => {
+  // keep Activity IDs that came in from P6, number the rest A1010, A1020 and so on
+  const codes = new Map(), taken = new Set();
+  leaves.forEach(t => { if (t.activityId && !taken.has(t.activityId)) { codes.set(t.id, t.activityId); taken.add(t.activityId); } });
+  let next = 1000;
+  leaves.forEach(t => { if (codes.has(t.id)) return; do next += 10; while (taken.has(`A${next}`)); codes.set(t.id, `A${next}`); taken.add(`A${next}`); });
+  const taskRows = leaves.map(t => {
     const k = c.get(t.id), d = t.milestone ? 0 : t.duration, con = t.constraint || {};
     const pct = Math.round(k.percent);
     return {
@@ -104,7 +109,7 @@ export function exportXER(project, computed) {
       phys_complete_pct: pct, rev_fdbk_flag: 'N', est_wt: 1, lock_plan_flag: 'N', auto_compute_act_flag: 'Y',
       complete_pct_type: 'CP_Drtn', task_type: t.milestone ? 'TT_FinMile' : 'TT_Task', duration_type: 'DT_FixedDUR2',
       status_code: pct >= 100 ? 'TK_Complete' : pct > 0 ? 'TK_Active' : 'TK_NotStart',
-      task_code: `A${1000 + 10 * (i + 1)}`, task_name: t.name, total_float_hr_cnt: hrs(k.float),
+      task_code: codes.get(t.id), task_name: t.name, total_float_hr_cnt: hrs(k.float),
       remain_drtn_hr_cnt: hrs(d * (1 - pct / 100)), target_drtn_hr_cnt: hrs(d),
       remain_work_qty: hrs(k.work * (1 - pct / 100)), target_work_qty: hrs(k.work), act_work_qty: 0,
       cstr_date: con.date != null && CSTR[con.type] ? ts(con.date) : '', cstr_type: CSTR[con.type] || '',

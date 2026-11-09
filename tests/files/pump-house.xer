@@ -1,0 +1,54 @@
+ERMHDR	19.12	2027-01-25	Project	admin	Primavera	dbxDatabaseNoName	Project Management	USD
+%T	CALENDAR
+%F	clndr_id	default_flag	clndr_name	proj_id	base_clndr_id	clndr_type	day_hr_cnt	week_hr_cnt	clndr_data
+%R	101	Y	Standard 5 Day			CA_Base	8	40	(0||CalendarData()((0||DaysOfWeek()((0||1()())(0||2()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||3()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||4()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||5()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||6()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||7()())))(0||VIEW(ShowTotal|Y)())(0||Exceptions()((0||0(d|46433)())))))
+%R	102	N	Office 5 Day			CA_Base	8	40	(0||CalendarData()((0||DaysOfWeek()((0||1()())(0||2()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||3()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||4()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||5()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||6()((0||0(f|12:00|s|08:00)())(0||1(f|17:00|s|13:00)())))(0||7()())))(0||VIEW(ShowTotal|Y)())(0||Exceptions()())))
+%T	PROJECT
+%F	proj_id	project_flag	proj_short_name	clndr_id	plan_start_date	last_recalc_date
+%R	1	Y	PHU-2027	101	2027-01-04 00:00	2027-01-25 08:00
+%R	2	Y	OFFICE	101	2027-03-01 00:00	2027-03-01 08:00
+%T	PROJWBS
+%F	wbs_id	proj_id	seq_num	proj_node_flag	wbs_short_name	wbs_name	parent_wbs_id
+%R	10	1	0	Y	PHU	Pump House Upgrade	
+%R	11	1	1	N	ENG	Engineering	10
+%R	12	1	2	N	CON	Construction	10
+%R	121	1	1	N	MECH	Mechanical	12
+%R	20	2	0	Y	OFFICE	Office move	
+%T	RSRC
+%F	rsrc_id	rsrc_name	rsrc_short_name	rsrc_type
+%R	301	Mechanical crew	MECH	RT_Labor
+%R	302	Pump set	PUMP	RT_Mat
+%R	303	Movers	MOVE	RT_Labor
+%T	RSRCRATE
+%F	rsrc_rate_id	rsrc_id	cost_per_qty	start_date
+%R	1	301	95	2020-01-01 00:00
+%T	TASK
+%F	task_id	proj_id	wbs_id	clndr_id	phys_complete_pct	complete_pct_type	task_type	status_code	task_code	task_name	remain_drtn_hr_cnt	target_drtn_hr_cnt	cstr_date	act_start_date	act_end_date	early_start_date	early_end_date	cstr_type
+%R	2001	1	11	101	0	CP_Drtn	TT_Mile	TK_Complete	A1000	Notice to proceed	0	0		2027-01-04 08:00	2027-01-04 08:00	2027-01-04 08:00	2027-01-04 08:00	
+%R	2002	1	11	101	0	CP_Drtn	TT_Task	TK_Complete	A1010	Design pump skid	0	80		2027-01-04 08:00	2027-01-15 17:00	2027-01-04 08:00	2027-01-15 17:00	
+%R	2003	1	11	101	0	CP_Drtn	TT_Task	TK_Active	A1020	Procure pumps	80	120		2027-01-18 08:00		2027-01-18 08:00	2027-02-05 17:00	
+%R	2004	1	121	101	0	CP_Drtn	TT_Task	TK_NotStart	A1030	Demolish old skid	40	40				2027-01-25 08:00	2027-01-29 17:00	
+%R	2005	1	121	101	0	CP_Drtn	TT_Task	TK_NotStart	A1040	Set new pumps	32	32				2027-02-08 08:00	2027-02-11 17:00	
+%R	2006	1	121	101	0	CP_Drtn	TT_Task	TK_NotStart	A1050	Pipe and wire – Unit 2	48	48				2027-02-10 08:00	2027-02-18 17:00	
+%R	2007	1	12	101	0	CP_Drtn	TT_Task	TK_NotStart	A1060	Test and turnover	24	24	2027-03-26 17:00			2027-02-17 08:00	2027-02-19 17:00	CS_MEOB
+%R	2008	1	10	101	0	CP_Drtn	TT_FinMile	TK_NotStart	A1070	Ready for service	0	0				2027-02-19 17:00	2027-02-19 17:00	
+%R	2009	1	10	102	0	CP_Drtn	TT_LOE	TK_Active	A1080	Project management	160	240		2027-01-04 08:00		2027-01-04 08:00	2027-02-12 17:00	
+%R	9999	2	20	101	0	CP_Drtn	TT_Task	TK_NotStart	M1000	Pack boxes	16	16				2027-03-01 08:00	2027-03-02 17:00	
+%T	TASKPRED
+%F	task_pred_id	task_id	pred_task_id	proj_id	pred_proj_id	pred_type	lag_hr_cnt
+%R	1	2002	2001	1	1	PR_FS	0
+%R	2	2003	2002	1	1	PR_FS	0
+%R	3	2004	2003	1	1	PR_SS	40
+%R	4	2005	2003	1	1	PR_FS	0
+%R	5	2005	2004	1	1	PR_FS	0
+%R	6	2006	2005	1	1	PR_SS	16
+%R	7	2007	2005	1	1	PR_FS	0
+%R	8	2007	2006	1	1	PR_FF	8
+%R	9	2008	2007	1	1	PR_FS	0
+%R	10	2004	9999	1	2	PR_FS	0
+%T	TASKRSRC
+%F	taskrsrc_id	task_id	proj_id	rsrc_id	target_qty_per_hr	remain_qty_per_hr
+%R	1	2005	1	301	1.0	1.0
+%R	2	2006	1	301	0.5	0.5
+%R	3	2005	1	302	2.0	2.0
+%E

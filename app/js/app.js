@@ -12,6 +12,9 @@ import { exportMSPDI, importMSPDI } from './io/mspdi.js';
 import { exportXER } from './io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from './io/csv.js';
 import { exportInversionModel } from './io/inversion.js';
+import { importP6XML, importXER, isP6XML } from './io/p6.js';
+import { importXLSX } from './io/xlsx.js';
+import { decodeText } from './io/files.js';
 
 const P = {
   open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
@@ -415,7 +418,8 @@ class App {
     if (window.showOpenFilePicker) {
       try {
         const [h] = await showOpenFilePicker({ types: [{ description: 'Schedules', accept: {
-          'application/json': ['.sched', '.json'], 'application/xml': ['.xml'], 'text/csv': ['.csv'], 'text/plain': ['.xer'] } }] });
+          'application/json': ['.sched', '.json'], 'application/xml': ['.xml'], 'text/csv': ['.csv'], 'text/plain': ['.xer'],
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'], 'application/vnd.ms-project': ['.mpp'] } }] });
         return this.openFile(await h.getFile(), h);
       } catch (e) { if (e.name === 'AbortError') return; }
     }
@@ -424,18 +428,25 @@ class App {
 
   async openFile(file, handle = null) {
     const name = file.name, ext = name.split('.').pop().toLowerCase();
+    const info = (title, text) => ask(title, text, [{ label: 'OK', value: true, primary: true }]);
     if (/^(mp4|mov|webm|m4v|avi)$/.test(ext)) return this.toast('Turning a video into a schedule is coming soon. Stay tuned!');
+    if (ext === 'mpp') return info('Save it from Project as XML', 'Microsoft Project keeps .mpp files in its own closed format. In Project, choose File, Save As, and pick "XML Format (*.xml)". Then open that .xml here. Every file is read on this computer and never uploaded.');
+    if (ext === 'xls' || ext === 'xlsb') return info('Save it as .xlsx', 'In Excel, choose File, Save As, and pick "Excel Workbook (*.xlsx)" or CSV. Then open that file here.');
+    if (/^(pdf|pptx?|docx?|png|jpe?g|gif|bmp|tiff?|webp)$/.test(ext)) return this.toast('Turning PDFs, slides and pictures into a schedule is coming next. For now, open a P6, Microsoft Project, Excel or CSV file.');
     if (this.store.dirty && this.project.tasks.length && !(await ask(`Open ${name}?`, 'Your current project is autosaved in this browser, but not saved to a file.', [{ label: 'Cancel', value: false }, { label: 'Open it', value: true, primary: true }]))) return;
     try {
-      const text = await file.text();
       let project, warnings = [], keep = false;
-      if (ext === 'xer') throw new Error('Opening P6 XER files is coming next. For now, export from P6 as Microsoft Project XML and open that.');
-      if (ext === 'xml') ({ project, warnings } = importMSPDI(text));
-      else if (ext === 'csv') ({ project, warnings } = importCSV(text));
+      if (ext === 'xlsx' || ext === 'xlsm') ({ project, warnings } = await importXLSX(await file.arrayBuffer(), name));
       else {
-        project = JSON.parse(text);
-        if (!Array.isArray(project.tasks)) throw new Error("This file isn't a scaled Schedule project.");
-        keep = true;
+        const text = decodeText(await file.arrayBuffer());
+        if (ext === 'xer') ({ project, warnings } = importXER(text));
+        else if (ext === 'xml') ({ project, warnings } = isP6XML(text) ? importP6XML(text) : importMSPDI(text));
+        else if (ext === 'csv') ({ project, warnings } = importCSV(text, name.replace(/\.csv$/i, '')));
+        else {
+          project = JSON.parse(text);
+          if (!Array.isArray(project.tasks)) throw new Error("This file isn't a scaled Schedule project.");
+          keep = true;
+        }
       }
       this.store.load(project, { fileName: keep ? name : null, handle: keep ? handle : null });
       this.toast(keep ? `Opened ${name}` : `Imported ${name}. Save to keep it as a .sched file.`);
