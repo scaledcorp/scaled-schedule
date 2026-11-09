@@ -157,6 +157,11 @@ svg.links .head.crit { fill: var(--crit); }
   transition: background-color .25s, box-shadow .15s; }
 .bar.milestone:hover::before, .bar.milestone.sel::before { box-shadow: 0 0 0 3px var(--azure-ring); }
 .bar.milestone .grip, .bar.milestone .prog { display: none; }
+/* bars Schedule Iguana just changed glow for a moment */
+.bar.flash { animation: bar-flash 1.6s var(--glide, ease-out); }
+.bar.milestone.flash { animation: none; }
+.bar.milestone.flash::before { animation: bar-flash 1.6s var(--glide, ease-out); }
+@keyframes bar-flash { 0%, 35% { box-shadow: 0 0 0 4px var(--azure-ring), 0 0 14px 2px var(--azure-ring); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .bar.milestone .dot { right: -14px; }
 .bar.dragging { transition: none; cursor: grabbing; z-index: 5; box-shadow: var(--shadow-pop); }
 .bar.pop { animation: grow .5s var(--spring); transform-origin: left center; }

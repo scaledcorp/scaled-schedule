@@ -1,7 +1,7 @@
 // Schedule Iguana: a small helper that turns plain requests into the app's normal, undoable edits and
 // answers questions from the computed schedule. Version 1 reads requests with built-in rules (instant,
 // offline, nothing to download). A small local AI model can sit behind the same plan format later.
-import { deleteTasks, fmtDate, fmtHours, fmtMoney, formatDuration, insertTask, parseAssignments, parseDay,
+import { deleteTasks, endOfDay, fmtDate, fmtHours, fmtMoney, formatDuration, insertTask, parseAssignments, parseDay,
   parseDuration, startOfDay, subtreeEnd, todayMinutes, yearOf } from '../model.js';
 import { schedule } from '../scheduler.js';
 import { setPercent } from './panels.js';
@@ -47,6 +47,16 @@ const REWRITES = [
   [/^(?:what(?:'s| is) )?(?:holding up|blocking|delaying) (.+?)\??$/i, 'why did $1 move?'],
   [/^what(?:'s| is) (.+?) waiting (?:on|for)\??$/i, 'why did $1 move?'],
   [/^why is (.+?) (?:so )?late\??$/i, 'why did $1 move?'],
+  // deadlines: "Build must be done by Friday", "finish Build by March 3", "Launch is due 4/1"
+  [/^(?:the )?deadline (?:for|on) (.+?) is (.+)$/i, 'finish $1 by $2'],
+  [/^(.+?) (?:must|has to|needs to|should|will|to|is to) (?:be )?(?:finish(?:ed)?|done|complete(?:d)?|wrapped up|wrap up|end|ready|delivered) (?:by|before|no later than|on or before) (.+)$/i, 'finish $1 by $2'],
+  [/^(?:finish|complete|wrap up|deliver|get) (.+?) (?:done |finished |wrapped up )?(?:by|before|no later than) (.+)$/i, 'finish $1 by $2'],
+  [/^(.+?) is due (?:on |by )?(.+)$/i, 'finish $1 by $2'],
+  [/^(.+?) (?:can't|cannot|can not|shouldn't|won't|mustn't) (?:start|begin) (?:until|till|before) ((?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)[a-z]*|next|tomorrow|in \d|the \d|\d).*)$/i, 'move $1 to $2'],
+  // shifts: "push Build by a week", "pull Launch in 2 days", "move Paint up by 3 days"
+  [/^(?:pull|bring|move|shift|bump) (.+?) (?:in|up|forward|earlier|ahead)(?: by)? (\d+(?:\.\d+)?) ?(hours?|days?|weeks?|months?)(?: earlier)?$/i, 'pull $1 in $2 $3'],
+  [/^(?:pull|bring|move|shift|bump) (.+?) (?:by )?(\d+(?:\.\d+)?) ?(hours?|days?|weeks?|months?) (?:earlier|sooner|forward|ahead)$/i, 'pull $1 in $2 $3'],
+  [/^(?:push|delay|slide|slip|bump|move|shift) (.+?) (?:out |back |later )?(?:by )?(\d+(?:\.\d+)?) ?(hours?|days?|weeks?|months?)(?: later| out| back)?$/i, 'push $1 out $2 $3'],
   // moves
   [/^(?:slide|push|delay|bump|postpone|reschedule|shift|slip|move) (.+?) (?:out |back |up )?(?:to|until|till|til|for|on) (.+)$/i, 'move $1 to $2'],
   [/^(.+?) (?:needs to|has to|should|will|can) (?:slide|move|slip|be pushed|be moved|start|be delayed) (?:out |back )?(?:to|until|till|on) (.+)$/i, 'move $1 to $2'],
@@ -67,7 +77,7 @@ const REWRITES = [
   [/^(?:drop|cut|scrap|nix|kill|cancel|get rid of|toss|axe) (?:the )?(.+)$/i, 'delete $1'],
   [/^(?:call|name) (.+?) (.+?) instead$/i, 'rename $1 to $2'],
   [/^change the name of (.+?) to (.+)$/i, 'rename $1 to $2'],
-  [new RegExp(`^${PERSON} (?:will|can|should|is going to|is gonna) (?:handle|own|do|take|run|lead|work on) (.+)$`), 'give $2 to $1'],
+  [new RegExp(`^${PERSON} (?:will|can|should|is going to|is gonna) (?:handle|own|do|take|run|lead|work on) (?![0-9])(.+)$`), 'give $2 to $1'],
   [/^(?:have|let) ([A-Z][\w'.-]*) (?:do|handle|own|take|run) (.+)$/, 'give $2 to $1'],
   // adding
   [/^(?:fit|squeeze|slot|throw|put|get|tack|work) (?:in |on )?(.+)$/i, 'add $1'],
@@ -75,6 +85,13 @@ const REWRITES = [
 
 export function normalize(input) {
   let s = ` ${input.trim().replace(/\s+/g, ' ')} `;
+  const raw = s;
+  // "start Build ASAP" means drop its fixed date; elsewhere "asap" is just filler
+  s = s.replace(/^\s*(?:start|do|begin|schedule|move|get going on|kick off)\s+(.+?)\s+(?:asap|as soon as possible|right away|immediately|now)[.!]*\s*$/i, 'unpin $1')
+    .replace(/^\s*(.+?)\s+(?:should|can|needs to|has to|could)\s+start\s+(?:asap|as soon as possible|right away|immediately|now|whenever it can)[.!]*\s*$/i, 'unpin $1')
+    // "maybe add a review" -> a tentative task
+    .replace(/^\s*(?:maybe|possibly|perhaps|tentatively)\s+(add|create|insert)\b/i, '$1 tentative');
+  const hinted = s !== raw;
   // greetings and filler: these don't change the meaning
   s = s.replace(/^\s*(?:hey|hi|ok|okay|so)?\s*(?:schedule )?(?:iguana)?[,!:]?\s*/i, ' ')
     .replace(/^\s*(?:please|can you|could you|would you|can we|could we|let'?s|i need you to|i want to|we need to|we should|go ahead and|i'd like to)\s+/i, ' ')
@@ -85,6 +102,11 @@ export function normalize(input) {
   s = s.replace(/\bhalf an? (hour|day|week)\b/gi, '0.5 $1')
     .replace(/\b(a couple of|a couple|a few|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|an?)[ -](minutes?|hours?|days?|weeks?|months?)\b/gi,
       (x, w, u) => `${WORDS[w.toLowerCase()]} ${u}`);
+  // hedges around amounts: "about 3 days", "3ish days", "a week or so" -> take the number as given
+  s = s.replace(/\b(?:roughly|about|around|approximately|approx\.?|something like|give or take|maybe|probably|like)\s+(?=\d)/gi, '')
+    .replace(/~\s*(?=\d)/g, '')
+    .replace(/(\d)\s*-?ish\b/gi, '$1')
+    .replace(/\b(minutes?|hours?|days?|weeks?|months?)(?:ish)?\s+(?:or so|give or take|tops|at most|or thereabouts)\b/gi, '$1');
   // "once Build is done", "when Build finishes" -> "after Build"
   s = s.replace(/\b(?:once|when|as soon as|after) (.+?) (?:is (?:done|finished|complete|wrapped up)|finishes|wraps(?: up)?|ends|is over)\b/gi, 'after $1');
   // ", Ana will handle it", "and Ana can own it", "have Ana do it" -> "and give it to Ana"
@@ -92,7 +114,7 @@ export function normalize(input) {
     .replace(/[,;]?\s*(?:and )?(?:have|let) ([A-Z][\w'.-]*) (?:do|handle|own|take|run) (?:it|that|this)\b/, ' and give it to $1')
     .replace(/\b(\d+(?:\.\d+)?) (minutes?|hours?|days?|weeks?|months?) of (.+?)(?= after | and | for |\s*$)/i, '$3 $1 $2');
   s = s.trim().replace(/\s+([,?])/g, '$1');
-  let rewrote = s !== plain;
+  let rewrote = s !== plain || hinted;
   for (const [re, to] of REWRITES) {
     if (re.test(s)) { s = s.replace(re, to); rewrote = true; break; }
   }
@@ -312,7 +334,7 @@ function interpretCore(text, { project, computed }) {
     const t = findTask(project, m[1]);
     if (!t) return notFound(m[1]);
     const c = k(t);
-    return { kind: 'answer', text: `${q(t)} ${starts ? `starts ${fmtDate(c.es)}` : `finishes ${fmtDate(c.ef)}`}${c.summary ? '' : `, with ${formatDuration(c.float, project)} of slack`}.` };
+    return { kind: 'answer', about: t.id, text: `${q(t)} ${starts ? `starts ${fmtDate(c.es)}` : `finishes ${fmtDate(c.ef)}`}${c.summary ? '' : `, with ${formatDuration(c.float, project)} of slack`}.` };
   }
   if ((m = low.match(/^why (?:did|does|is|has) (.+?) (?:move|moved|start|starting|late|slip|slipped|pushed)/))) {
     const t = findTask(project, m[1]);
@@ -320,10 +342,10 @@ function interpretCore(text, { project, computed }) {
     const preds = t.preds.map(p => project.tasks.find(x => x.id === p.id)).filter(Boolean);
     if (preds.length) {
       const drive = preds.reduce((a, b) => (k(b).ef > k(a).ef ? b : a));
-      return { kind: 'answer', text: `${q(t)} waits for ${q(drive)}, which finishes ${fmtDate(k(drive).ef)}.` };
+      return { kind: 'answer', about: t.id, text: `${q(t)} waits for ${q(drive)}, which finishes ${fmtDate(k(drive).ef)}.` };
     }
-    if (t.constraint?.date != null) return { kind: 'answer', text: `${q(t)} has a fixed date: it can't start before ${fmtDate(t.constraint.date)}.` };
-    return { kind: 'answer', text: `Nothing is holding ${q(t)} back. It starts with the project.` };
+    if (t.constraint?.date != null) return { kind: 'answer', about: t.id, text: `${q(t)} has a fixed date: ${t.constraint.type === 'FNLT' ? 'it must finish by' : "it can't start before"} ${fmtDate(t.constraint.date)}.` };
+    return { kind: 'answer', about: t.id, text: `Nothing is holding ${q(t)} back. It starts with the project.` };
   }
 
   // ---- edits
@@ -345,6 +367,40 @@ function interpretCore(text, { project, computed }) {
       const succ = pick(p, to), ex = succ.preds.find(x => x.id === from.id);
       if (ex) { ex.lag = lag; ex.type = 'FS'; } else succ.preds.push({ id: from.id, type: 'FS', lag });
     });
+  }
+  if ((m = s.match(/^finish (.+?) by (.+)$/i))) {
+    const t = findTask(project, m[1]);
+    if (!t) return notFound(m[1]);
+    const day = readDay(m[2], yearOf(k(t).ef));
+    if (day == null) {
+      const b = findTask(project, m[2]);   // "Design must be done before Build" is a link, not a date
+      if (b) return interpretCore(`link ${t.name} to ${b.name}`, { project, computed });
+      return { kind: 'answer', text: `I couldn't read "${clean(m[2])}" as a date. Try "March 15", "Friday" or 3/15/27.` };
+    }
+    const due = endOfDay(day, computed.calendar), late = k(t).ef > due;
+    return plan('Set a deadline', [`${q(t)} must finish by ${fmtDate(day * 1440)}`,
+      late && `Right now it finishes ${fmtDate(k(t).ef)}, so it will show as late until the work ahead of it gets shorter`],
+    (p, cal) => { pick(p, t).constraint = { type: 'FNLT', date: endOfDay(day, cal) }; });
+  }
+  if ((m = s.match(new RegExp(`^(push|pull) (.+?) (?:out|in) ${NUM} ?${UNIT}$`, 'i')))) {
+    m = [m[0], m[2], m[1].toLowerCase() === 'pull' ? '-' : '', m[3], m[4]];
+    const t = findTask(project, m[1]);
+    if (!t) return notFound(m[1]);
+    const amt = durOf(m[3], m[4], project) * (m[2] ? -1 : 1), cal = computed.calendar;
+    const to = cal.nextWorkStart(cal.shift(k(t).es, amt));
+    const preds = t.preds.map(x => project.tasks.find(y => y.id === x.id)).filter(Boolean);
+    const drive = preds.length ? preds.reduce((a, b) => (k(b).ef > k(a).ef ? b : a)) : null;
+    return plan(amt > 0 ? 'Push task out' : 'Pull task in', [
+      `${amt > 0 ? 'Push' : 'Pull'} ${q(t)} ${amt > 0 ? 'out' : 'in'} ${formatDuration(Math.abs(amt), project)}: start no earlier than ${fmtDate(to)}`,
+      amt < 0 && drive && k(drive).ef > to && `It still waits for ${q(drive)}, so it can only come in as far as that allows`,
+    ], p => { pick(p, t).constraint = { type: 'SNET', date: to }; });
+  }
+  if ((m = s.match(/^(?:unpin|unfix|unlock|free up|(?:clear|remove|drop) the (?:date|constraint) (?:on|for|from)) (.+)$/i))) {
+    const t = findTask(project, m[1]);
+    if (!t) return notFound(m[1]);
+    if (!t.constraint || t.constraint.type === 'ASAP') return { kind: 'answer', about: t.id, text: `${q(t)} already starts as soon as it can.` };
+    return plan('Start as soon as possible', [`Let ${q(t)} start as soon as it can (drops its fixed date)`],
+      p => { pick(p, t).constraint = { type: 'ASAP', date: null }; });
   }
   if ((m = s.match(/^(?:link|connect) (.+?) (?:to|->|then|before|with) (.+)$/i)) || (m = s.match(/^make (.+?) depend on (.+)$/i))) {
     const [a, b] = /depend/i.test(s) ? [m[2], m[1]] : [m[1], m[2]];
@@ -453,8 +509,22 @@ function suggest(s, project, computed) {
     text: "I'm not sure what you meant. Is it one of these? Tap one, or type it your way." };
 }
 
-// Several tasks at once ("three new tasks", "design, build and test", "A then B then C"), else one.
+// "add a tentative review", "add an optional inspection, maybe": added with "Tentative" in the notes.
 function planAdd(rest, project) {
+  let tentative = false;
+  rest = rest.replace(/[,\s]*\b(?:maybe|possibly|perhaps|tentative(?:ly)?|optional(?:ly)?|if (?:we have|there's|there is) time)\b,?/gi, () => { tentative = true; return ' '; });
+  const r = planAddList(rest, project);
+  if (!tentative || r.kind !== 'plan') return r;
+  const run = r.run;
+  return { ...r, lines: [...r.lines, 'Marked "Tentative" in the notes'], run: (p, cal, comp) => {
+    const had = new Set(p.tasks.map(t => t.id)), out = run(p, cal, comp);
+    p.tasks.forEach(t => { if (!had.has(t.id)) t.notes = t.notes ? `Tentative. ${t.notes}` : 'Tentative'; });
+    return out;
+  } };
+}
+
+// Several tasks at once ("three new tasks", "design, build and test", "A then B then C"), else one.
+function planAddList(rest, project) {
   if (/["“]/.test(rest)) return planAddSingle(rest, project);
   let r = ` ${rest} `, after = null, who = null;
   r = r.replace(/\s(?:right\s+)?after\s+(.+?)(?=\s+(?:and\s+(?:give|assign)|give|assign(?:ed)?|for)\b|\s*$)/i, (x, y) => { after = y; return ' '; });
@@ -543,11 +613,14 @@ export class Iguana {
     if (!text.trim()) return;
     this.say(esc(text), 'user');
     const { project, computed } = this.app;
-    const res = interpret(text, { project, computed });
+    const meant = this.resolve(text);
+    const res = interpret(meant, { project, computed });
+    if (meant !== text && !res.as && res.kind !== 'answer') res.as = meant.replace(/\n/g, '; ');
     if (res.as) this.say(`I read that as <b>“${esc(res.as)}”</b>.`);
     if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
     if (res.kind === 'answer') {
       const el = this.say(esc(res.text));
+      if (res.about != null) this.focusIds = [res.about];
       if (res.suggestions?.length) el.insertAdjacentHTML('beforeend', `<div class="ig-sugg">${res.suggestions.map(x => `<button data-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
       return;
     }
@@ -557,7 +630,10 @@ export class Iguana {
     try { newId = res.run(copy, computed.calendar, computed); } catch (e) { this.say(esc(`I couldn't do that: ${e.message}`)); return; }
     const after = schedule(copy), lines = [...res.lines];
     if (newId != null) { const n = after.byId.get(newId); lines.push(`Runs ${fmtDate(n.es)} to ${fmtDate(n.ef)}`); }
-    if (after.finish !== computed.finish) lines.push(`Project finish moves to ${fmtDate(after.finish)}`);
+    if (after.finish !== computed.finish) {
+      const m = computed.calendar.workBetween(computed.finish, after.finish);
+      lines.push(`Project finish moves to ${fmtDate(after.finish)} (${m > 0 ? '+' : '−'}${formatDuration(Math.abs(m), project)})`);
+    }
     const i = this.pending.push({ ...res, text }) - 1;
     this.say(`<p>Here's what I'll do:</p><ul>${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
       <div class="ig-acts"><button class="btn primary" data-act="do" data-i="${i}">Do it</button><button class="btn" data-act="change" data-i="${i}">Change</button></div>`);
@@ -569,11 +645,49 @@ export class Iguana {
     p.done = true;
     this.log.querySelectorAll(`[data-i="${i}"]`).forEach(b => { b.disabled = true; });
     const { store } = this.app, before = this.app.computed.finish;
+    const was = new Map(this.app.project.tasks.map(t => [t.id, this.app.computed.byId.get(t.id)?.ef]));
+    const stored = new Map(this.app.project.tasks.map(t => [t.id, JSON.stringify(t)]));
     let newId;
     try { store.update(p.label, pr => { newId = p.run(pr, this.app.computed.calendar, this.app.computed); }); }
     catch (e) { this.say(esc(`That didn't work: ${e.message}`)); return; }
+    // Say what changed in one line, and make the bars that changed glow for a moment.
+    const c = this.app.computed, project = this.app.project, added = [], moved = [];
+    project.tasks.forEach(t => {
+      const k = c.byId.get(t.id), b = was.get(t.id);
+      if (!was.has(t.id)) added.push(t);
+      else if (k && !k.summary && k.ef !== b) moved.push([t, c.calendar.workBetween(b, k.ef)]);
+    });
+    // "it" next time means the tasks this request edited, not the ones that only rippled along.
+    const edited = project.tasks.filter(t => stored.has(t.id) && stored.get(t.id) !== JSON.stringify(t));
+    this.focusIds = added.length ? added.map(t => t.id) : edited.length ? edited.map(t => t.id) : newId != null ? [newId] : this.focusIds;
+    const days = m => `${m > 0 ? '+' : '−'}${formatDuration(Math.abs(m), project)}`;
+    const parts = [];
+    if (added.length) parts.push(added.length === 1 ? `Added "${esc(added[0].name)}"` : `Added ${added.length} tasks`);
+    if (moved.length) {
+      const big = moved.reduce((a, b) => (Math.abs(b[1]) > Math.abs(a[1]) ? b : a));
+      parts.push(`"${esc(big[0].name)}" now finishes ${esc(fmtDate(c.byId.get(big[0].id).ef))} (${days(big[1])})` +
+        (moved.length > 1 ? `; ${moved.length - 1} other task${moved.length > 2 ? 's' : ''} shifted` : ''));
+    }
+    if (c.finish !== before) parts.push(`Project finish ${esc(fmtDate(c.finish))} (${days(c.calendar.workBetween(before, c.finish))})`);
+    else if (moved.length) parts.push('Project finish holds');
     if (newId != null) { store.select([newId], newId); this.app.grid.scrollIntoView(); }
-    const fin = this.app.computed.finish;
-    this.say(`Done.${fin !== before ? ` The project now finishes ${esc(fmtDate(fin))}.` : ''} <button class="ig-link" data-act="undo">Undo</button>`);
+    const glow = [...added.map(t => t.id), ...moved.map(([t]) => t.id)];
+    setTimeout(() => glow.forEach(id => this.app.gantt.els.get(id)?.bar.classList.add('flash')), 50);
+    setTimeout(() => glow.forEach(id => this.app.gantt.els.get(id)?.bar.classList.remove('flash')), 1700);
+    this.say(`Done.${parts.length ? ` ${parts.join('. ')}.` : ''} <button class="ig-link" data-act="undo">Undo</button>`);
+  }
+
+  // "it", "that", "them", "those" mean what Iguana just added or changed (or the selection).
+  resolve(text) {
+    const PRON = /\b(?:it|that|them|those|these|they)\b|\bthis\b(?!\s+(?:week|month|morning|afternoon|mon|tue|wed|thu|fri|sat|sun)\w*)/gi;
+    if (!PRON.test(text) || /^\s*(?:add|create|insert|new)\b/i.test(text)) return text;
+    const ids = (this.focusIds?.length ? this.focusIds : [...this.app.store.selection])
+      .filter(id => this.app.project.tasks.some(t => t.id === id));
+    if (!ids.length) return text;
+    const names = ids.map(id => this.app.project.tasks.find(t => t.id === id).name);
+    const plural = /\b(?:them|those|these|they)\b/i.test(text);
+    return plural || names.length > 1
+      ? names.map(n => text.replace(PRON, n)).join('\n')
+      : text.replace(PRON, names[0]);
   }
 }
