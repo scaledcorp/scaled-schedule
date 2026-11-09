@@ -271,6 +271,11 @@ test('Schedule Iguana picks the closest command for loose wording', () => {
   eq(read('stick a 3 day review after testing'), 'add Review 3 days after Testing');
   eq(read('design is wrapped, finally'), 'Design is done');
   eq(interpret('blue sky thinking', ctx).unknown, true);
+  p.tasks.push(createTask(p, { name: 'Client review and contract' }));
+  const ctx2 = { project: p, computed: schedule(p) };
+  const r2 = interpret('stick a 2 day review after build', ctx2);
+  eq([r2.as, r2.lines[0]], ['add Review 2 days after Build', 'Add "Review", 2 days, after "Build"']);
+  eq(interpret('add Sign-off 1 day after Client review and contract', ctx2).lines[0], 'Add "Sign-off", 1 day, after "Client review and contract"');
 });
 
 const pass = results.filter(r => r[1]).length;
