@@ -247,9 +247,22 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0
 .palette li.on { background: var(--azure-soft); }
 .palette kbd { font: 12px var(--sans); color: var(--muted); }
 .empty { position: absolute; inset: var(--head) 0 0 0; display: grid; place-items: center; pointer-events: none; }
-.empty .card { pointer-events: auto; text-align: center; padding: 26px 30px; max-width: 380px; }
-.empty h3 { margin: 0 0 6px; font-size: 18px; }
-.empty p { margin: 0 0 16px; color: var(--muted); }
+.empty .card { pointer-events: auto; text-align: center; padding: 26px 30px; max-width: 440px; display: grid; justify-items: center; gap: 14px; }
+.empty h3 { margin: 0; font-size: 18px; }
+.empty p { margin: 0; color: var(--muted); }
+.dropzone { width: 100%; display: grid; justify-items: center; gap: 4px; padding: 22px 20px 20px; cursor: pointer;
+  border: 2px dashed var(--line); border-radius: 18px; background: var(--pane-2); color: var(--ink); font: inherit;
+  transition: border-color .2s, background .2s, transform .28s var(--spring); }
+.dropzone svg { width: 34px; height: 34px; stroke: var(--azure); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; margin-bottom: 4px;
+  transition: transform .28s var(--spring); }
+.dropzone strong { font-size: 15px; font-weight: 600; }
+.dropzone span { color: var(--azure); font-size: 13.5px; }
+.dropzone small { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin-top: 8px; max-width: 34ch; }
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--azure); background: var(--azure-soft); outline: none; }
+.dropzone:hover svg { transform: translateY(-2px); }
+.dropzone.over { border-color: var(--azure); border-style: solid; background: var(--azure-soft); transform: scale(1.03); box-shadow: 0 0 0 4px var(--azure-ring); }
+.dropzone.over svg { transform: translateY(-4px); }
+@media (max-width: 560px) { .empty .card { padding: 16px; } .dropzone small { display: none; } }
 .drop-hint { position: fixed; inset: 10px; z-index: 90; border: 3px dashed var(--azure); border-radius: 22px; background: color-mix(in srgb, var(--azure) 8%, transparent);
   display: grid; place-items: center; font-size: 20px; font-weight: 600; color: var(--azure); pointer-events: none; animation: pop .2s var(--spring); }
 /* ---------- Schedule Iguana */

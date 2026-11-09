@@ -521,19 +521,25 @@ class App {
     this.toast(what ? `Exported ${what}: ${name}` : `Saved ${name} to your downloads`);
   }
 
+  // A file can be dropped anywhere on the page. On the empty screen the drop box lights up instead of
+  // the page-wide outline, and clicking it opens the file picker.
   dropTarget() {
     let hint = null, depth = 0;
+    const zone = document.getElementById('dropzone'), empty = document.getElementById('empty');
+    zone.addEventListener('click', () => this.pickFile());
+    const end = () => { depth = 0; hint?.remove(); hint = null; zone.classList.remove('over'); };
     addEventListener('dragenter', e => {
       if (![...e.dataTransfer.types].includes('Files')) return;
       e.preventDefault();
-      if (depth++ === 0) { hint = Object.assign(document.createElement('div'), { className: 'drop-hint', textContent: 'Drop to open' }); document.body.appendChild(hint); }
+      if (depth++ > 0) return;
+      if (!empty.hidden) zone.classList.add('over');
+      else { hint = Object.assign(document.createElement('div'), { className: 'drop-hint', textContent: 'Drop to open' }); document.body.appendChild(hint); }
     });
-    addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; hint?.remove(); } });
+    addEventListener('dragleave', () => { if (--depth <= 0) end(); });
     addEventListener('dragover', e => e.preventDefault());
     addEventListener('drop', e => {
       e.preventDefault();
-      depth = 0;
-      hint?.remove();
+      end();
       const f = e.dataTransfer.files[0];
       if (f) this.openFile(f);
     });
