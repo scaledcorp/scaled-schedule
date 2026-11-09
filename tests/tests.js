@@ -9,7 +9,9 @@ import { exportXER } from '../app/js/io/xer.js';
 import { importP6XML, importXER } from '../app/js/io/p6.js';
 import { importXLSX } from '../app/js/io/xlsx.js';
 import { decodeText } from '../app/js/io/files.js';
-import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
+import { importPDF } from '../app/js/io/pdf.js';
+import { importDOCX, importPPTX } from '../app/js/io/office.js';
+import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV, importTable } from '../app/js/io/csv.js';
 import { coach, Iguana, interpret, readDay } from '../app/js/ui/iguana.js';
 import { exportInversionModel } from '../app/js/io/inversion.js';
 
@@ -505,9 +507,80 @@ test('CSV with only start and finish dates, P6 style', () => {
   eq(p.tasks[2].preds[0].lag, 480);
   eq(show(p.start), '2027-01-04T08:00');
 });
+// ---------------------------------------------------------------- schedules inside documents
+// The same project again, as a P6-style PDF report (WBS bands, two pages, a Gantt area), a
+// Project-style PDF (indented names, a name that wraps, links with lags), a slide with a table, a
+// slide with a drawn timeline, and a Word table. Made with Edge, PowerPoint and Word.
+const docs = Promise.all(['pump-house-p6.pdf', 'pump-house-project.pdf', 'pump-house-table.pptx',
+  'pump-house-timeline.pptx', 'pump-house.docx'].map(fixture));
+const brief = (p, guessed) => {
+  const r = schedule(p), row = id => p.tasks.findIndex(t => t.id === id) + 1;
+  return p.tasks.map((t, i) => [t.level, t.name, t.milestone ? 'M' : t.duration / 480, t.activityId || '',
+    t.preds.map(x => `${row(x.id)}${x.type}${x.lag ? `+${x.lag / 480}` : ''}`).join(','),
+    show(r.byId.get(t.id).es).slice(5, 10), show(r.byId.get(t.id).ef).slice(5, 10), [...(guessed?.[i] || [])].join('/')].join(' | '));
+};
+test('PDF printed from P6: WBS bands, Activity IDs, actual dates, two pages', async () => {
+  const [pdf] = await docs;
+  const { result } = await importPDF(pdf, 'pump-house-p6.pdf');
+  eq(result.header.slice(0, 7), ['Activity ID', 'Activity Name', 'Original Duration', 'Remaining Duration', 'Start', 'Finish', 'Total Float']);
+  eq(brief(result.project), [
+    '1 | Pump House Upgrade | 35 |  |  | 01-04 | 02-19 | ', '2 | Engineering | 25 |  |  | 01-04 | 02-12 | ',
+    '3 | Notice to proceed | M | A1000 |  | 01-04 | 01-04 | ', '3 | Design pump skid | 10 | A1010 |  | 01-04 | 01-15 | ',
+    '3 | Procure pumps | 15 | A1020 |  | 01-18 | 02-05 | ', '3 | Project management | 30 | A1080 |  | 01-04 | 02-12 | ',
+    '2 | Construction | 19 |  |  | 01-25 | 02-19 | ', '3 | Mechanical | 18 |  |  | 01-25 | 02-19 | ',
+    '4 | Demolish old skid | 5 | A1030 |  | 01-25 | 01-29 | ', '4 | Set new pumps | 4 | A1040 |  | 02-08 | 02-11 | ',
+    '4 | Pipe and wire – Unit 2 | 6 | A1050 |  | 02-10 | 02-17 | ', '4 | Test and turnover | 3 | A1060 |  | 02-17 | 02-19 | ',
+    '4 | Ready for service | M | A1070 |  | 02-19 | 02-19 | ']);
+  const t = result.project.tasks;
+  eq([t[2].percent, t[3].percent, t[4].percent, t[4].actualStart != null, t[8].actualStart], [100, 100, 33, true, null]);
+});
+test('PDF printed from Project: indents, a wrapped name, links with lags', async () => {
+  const [, pdf] = await docs;
+  const { result } = await importPDF(pdf, 'pump-house-project.pdf');
+  eq(brief(result.project), [
+    '1 | Pump House Upgrade | 35 |  |  | 01-04 | 02-18 | ', '2 | Engineering | 25 |  |  | 01-04 | 02-05 | ',
+    '3 | Design pump skid | 10 |  |  | 01-04 | 01-15 | ', '3 | Procure pumps | 15 |  | 3FS | 01-18 | 02-05 | ',
+    '2 | Construction | 19 |  |  | 01-25 | 02-18 | ', '3 | Demolish old skid | 5 |  | 4SS+5 | 01-25 | 01-29 | ',
+    '3 | Set new pumps | 4 |  | 4FS,6FS | 02-08 | 02-11 | ',
+    '3 | Pipe and wire – Unit 2 (includes the new discharge header and instrument loops) | 6 |  | 7SS+2 | 02-10 | 02-17 | ',
+    '3 | Test and turnover | 3 |  | 7FS,8FF+1 | 02-16 | 02-18 | ', '2 | Ready for service | M |  | 9FS | 02-18 | 02-18 | ']);
+});
+test('tables on a slide and in a Word document', async () => {
+  const [, , table, , docx] = await docs;
+  const s = (await importPPTX(table, 'pump-house-table.pptx')).result;
+  eq(brief(s.project), ['1 | Design pump skid | 10 |  |  | 01-04 | 01-15 | ', '1 | Procure pumps | 15 |  | 1FS | 01-18 | 02-05 | ',
+    '1 | Set new pumps | 4 |  | 2FS | 02-08 | 02-11 | ', '1 | Test – turnover | 3 |  | 3FS | 02-12 | 02-16 | ',
+    '1 | Ready for service | M |  | 4FS | 02-16 | 02-16 | ']);
+  // Word: WBS numbers give the outline, and links name WBS numbers
+  const w = (await importDOCX(docx, 'pump-house.docx')).result;
+  eq(brief(w.project), ['1 | Engineering | 1 |  |  | 01-04 | 02-05 | ', '2 | Design pump skid | 10 |  |  | 01-04 | 01-15 | ',
+    '2 | Procure pumps | 15 |  | 2FS | 01-18 | 02-05 | ', '1 | Construction | 1 |  |  | 02-08 | 02-16 | ',
+    '2 | Set new pumps | 4 |  | 3FS | 02-08 | 02-11 | ', '2 | Test and turnover | 3 |  | 5FS | 02-12 | 02-16 | ',
+    '1 | Ready for service | M |  | 6FS | 02-16 | 02-16 | ']);
+});
+test('a timeline drawn on a slide: dates from bar positions, groups, a milestone', async () => {
+  const [, , , timeline] = await docs;
+  const { table, result } = await importPPTX(timeline, 'pump-house-timeline.pptx');
+  eq(table.shapes, true);
+  eq(brief(result.project, result.guessed), [
+    '1 | Engineering | 1 |  |  | 01-04 | 02-05 | start/finish/dur', '2 | Design pump skid | 10 |  |  | 01-04 | 01-15 | start/finish',
+    '2 | Procure pumps | 15 |  |  | 01-18 | 02-05 | start/finish', '1 | Construction | 1 |  |  | 02-08 | 02-19 | start/finish/dur',
+    '2 | Set new pumps | 4 |  |  | 02-08 | 02-11 | start/finish', '2 | Pipe and wire | 7 |  |  | 02-10 | 02-18 | start/finish',
+    '2 | Ready for service | M |  |  | 02-19 | 02-19 | start/finish']);
+});
+test('review: a column read as the wrong field can be changed', async () => {
+  const [, , table] = await docs;
+  const { table: t, result } = await importPPTX(table, 'pump-house-table.pptx');
+  eq(result.map.pred, 4);
+  // read Predecessors as Notes instead, and Finish as nothing
+  const again = importTable(t.rows, { name: t.name, indents: t.indents, map: { name: 0, dur: 1, start: 2, notes: 4 } });
+  eq([again.project.tasks[1].preds.length, again.project.tasks[1].notes, again.map.finish], [0, '1', -1]);
+});
+
+await Promise.all(pending);
 test('every reader runs offline: no network while importing', async () => {
-  const all = await files;
-  const before = performance.getEntriesByType('resource').length;
+  const all = await files, more = await docs;
+  const before = performance.getEntriesByType('resource').filter(e => !e.name.startsWith(`${location.origin}/app/`)).length;
   const realFetch = window.fetch;
   let calls = 0;
   window.fetch = () => { calls++; throw new Error('network used'); };
@@ -515,8 +588,12 @@ test('every reader runs offline: no network while importing', async () => {
     importXER(decodeText(all[0]));
     importP6XML(decodeText(all[1]));
     await importXLSX(all[2], 'x.xlsx');
+    await importPDF(more[0], 'x.pdf');
+    await importPPTX(more[3], 'x.pptx');
+    await importDOCX(more[4], 'x.docx');
   } finally { window.fetch = realFetch; }
-  eq([calls, performance.getEntriesByType('resource').length - before], [0, 0]);
+  const after = performance.getEntriesByType('resource').filter(e => !e.name.startsWith(`${location.origin}/app/`)).length;
+  eq([calls, after - before], [0, 0]);
 });
 
 await Promise.all(pending);

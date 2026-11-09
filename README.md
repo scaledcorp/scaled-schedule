@@ -29,7 +29,9 @@ account, and keeps your files on your own computer.
 - Progress, baselines with ghost bars, undo/redo, autosave, light and dark themes
 - Drag bars to move them, drag their right edge to stretch, drag the dot onto another bar to link
 - Open or drop in: `.sched` (its own format), Primavera P6 XER and P6 XML, Microsoft Project XML, Excel
-  (.xlsx), CSV, Jira CSV export. Files are read in the browser and never uploaded.
+  (.xlsx), CSV, Jira CSV export, and schedules inside documents: PDF reports, PowerPoint (tables or a
+  drawn timeline) and Word tables, shown for review before they become a schedule. Files are read in
+  the browser and never uploaded; PDF.js (Apache 2.0, in `app/vendor/pdfjs`) ships with the app.
 - Save and export: `.sched`, Microsoft Project XML, Primavera P6 XER, CSV, Jira import CSV
 
 ## Keyboard
@@ -59,6 +61,10 @@ account, and keeps your files on your own computer.
   resources come across.
 - **Microsoft Project .mpp:** Project keeps .mpp in its own closed format, so save it from Project as
   XML first (File → Save As → XML Format).
+- **PDF, PowerPoint, Word:** drop in a schedule printed to PDF from P6, Project or Excel, a slide with
+  a schedule table or a timeline of bars under month labels, or a Word table. A review screen shows
+  what was found, lets you change which column is read as what, and marks guessed cells in amber.
+  Scanned PDFs and pictures aren't read yet.
 - **Excel:** a sheet with a task or activity name column opens directly. Durations, start and finish
   dates, % complete and predecessors (by row number or Activity ID) are read; indented names or
   grouped rows become the outline.
