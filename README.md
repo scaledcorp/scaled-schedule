@@ -28,7 +28,8 @@ account, and keeps your files on your own computer.
 - Resources with rates and max units, assignments, work and cost, over-booking warnings
 - Progress, baselines with ghost bars, undo/redo, autosave, light and dark themes
 - Drag bars to move them, drag their right edge to stretch, drag the dot onto another bar to link
-- Open: `.sched` (its own format), Microsoft Project XML, CSV, Jira CSV export
+- Open or drop in: `.sched` (its own format), Primavera P6 XER and P6 XML, Microsoft Project XML, Excel
+  (.xlsx), CSV, Jira CSV export. Files are read in the browser and never uploaded.
 - Save and export: `.sched`, Microsoft Project XML, Primavera P6 XER, CSV, Jira import CSV
 
 ## Keyboard
@@ -53,7 +54,14 @@ account, and keeps your files on your own computer.
 - **Microsoft Project:** Export → Microsoft Project (.xml), then open it in Project. Project users can
   send you their schedule with File → Save As → XML.
 - **Primavera P6:** Export → Primavera P6 (.xer), then File → Import in P6 Professional. P6 can also
-  import the Microsoft Project XML. Summary tasks become WBS elements.
+  import the Microsoft Project XML. Summary tasks become WBS elements. P6 schedules open here from an
+  XER or P6 XML export: WBS, activities, Activity IDs, links, constraints, progress, the calendar and
+  resources come across.
+- **Microsoft Project .mpp:** Project keeps .mpp in its own closed format, so save it from Project as
+  XML first (File → Save As → XML Format).
+- **Excel:** a sheet with a task or activity name column opens directly. Durations, start and finish
+  dates, % complete and predecessors (by row number or Activity ID) are read; indented names or
+  grouped rows become the outline.
 - **Jira:** export your issues from Jira as CSV and open the file here (epics become summary tasks).
   Export → Jira (.csv) gives a file for Jira's "Import issues from CSV".
 - **ProjectLibre:** opens the Microsoft Project XML (it ignores holidays in that file).

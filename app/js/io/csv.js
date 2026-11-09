@@ -1,5 +1,5 @@
 // CSV in and out, plus Jira: read a Jira issue CSV export, and write a CSV Jira's importer accepts.
-import { createTask, formatAssignments, formatPreds, isoDay, newProject, normalizeLevels,
+import { createTask, endOfDay, formatAssignments, formatPreds, isoDay, newProject, normalizeLevels,
   parseAssignments, parseDay, parseDuration, parsePreds, startOfDay } from '../model.js';
 import { WorkCalendar } from '../calendar.js';
 
@@ -42,9 +42,10 @@ export function exportCSV(project, computed) {
   return toCSV(out);
 }
 
-// Header lookup that tolerates Jira's naming ("Custom field (Epic Link)", duplicate columns, etc.).
+// Header lookup that tolerates Jira's naming ("Custom field (Epic Link)", duplicate columns, etc.)
+// and spreadsheet headers split over two lines.
 function columns(header) {
-  const norm = header.map(h => h.trim().toLowerCase());
+  const norm = header.map(h => String(h ?? '').replace(/\s+/g, ' ').trim().toLowerCase());
   return (...names) => {
     for (const n of names) {
       const i = norm.findIndex(h => h === n || h === `custom field (${n})`);
@@ -59,43 +60,100 @@ export function isJiraCSV(rows) {
   return col('issue key') >= 0 && col('summary') >= 0;
 }
 
-export function importCSV(text) {
+export function importCSV(text, name) {
   const rows = parseCSV(text);
   if (rows.length < 2) throw new Error('The CSV file has no rows.');
-  return isJiraCSV(rows) ? importJira(rows) : importPlainCSV(rows);
+  return isJiraCSV(rows) ? importJira(rows) : importTable(rows, { name: name || 'Imported from CSV' });
 }
 
-function importPlainCSV(rows) {
-  const col = columns(rows[0]);
-  const name = col('name', 'task name', 'task'), level = col('outline level', 'level');
-  const durC = col('duration (days)', 'duration'), startC = col('start'), predC = col('predecessors');
-  const resC = col('resources', 'resource names'), pctC = col('% complete', 'percent complete'), notesC = col('notes');
-  if (name < 0) throw new Error('The CSV needs a "Name" column.');
-  const project = newProject({ name: 'Imported from CSV' });
+const NAMES = ['name', 'task name', 'task', 'activity name', 'activity', 'task description', 'activity description',
+  'description', 'title', 'item'];
+
+// "2027-01-04", "1/4/27", "Mon 1/4/27 8:00 AM", "04-Jan-27 A" (P6 marks actual dates with A) -> day index.
+function readDate(text) {
+  let s = String(text ?? '').trim().replace(/\s*[A*]$/, '');
+  if (!s) return null;
+  s = s.replace(/^(\d{1,2})[- ]([a-z]{3,})[- ,]+(\d{2,4})\b/i, (m, d, mo, y) => `${d} ${mo} ${y.length === 2 ? 2000 + +y : y}`);
+  return parseDay(s, new Date().getFullYear()) ?? parseDay(s.replace(/[ T]+\d{1,2}:\d{2}(:\d{2})?\s*([ap]m)?$/i, ''), new Date().getFullYear());
+}
+
+// Rows of cells with a header row (CSV, or a sheet read from Excel) -> project. Finds the header
+// within the first rows, maps columns by name, reads links by row number or by Activity ID, and
+// takes outline levels from a level column, unique WBS numbers, Excel row grouping or name indent.
+export function importTable(rows, { name = 'Imported project', outline = [], indents = [], extra = [] } = {}) {
+  const head = rows.slice(0, 20).findIndex(r => columns(r)(...NAMES) >= 0);
+  if (head < 0) throw new Error("Couldn't find a task name column. Name one Task Name, Activity Name or Name.");
+  const col = columns(rows[head]);
+  const C = {
+    name: col(...NAMES), level: col('outline level', 'level', 'indent level'),
+    wbs: col('wbs', 'outline number', 'wbs code'), id: col('activity id', 'task id', 'id', 'task code'),
+    dur: col('duration (days)', 'duration', 'original duration', 'orig dur', 'planned duration', 'days', 'duration (d)'),
+    start: col('start', 'start date', 'planned start', 'early start', 'begin'),
+    finish: col('finish', 'finish date', 'end', 'end date', 'planned finish', 'early finish', 'due date', 'due'),
+    pred: col('predecessors', 'predecessor', 'depends on', 'dependencies', 'preds'),
+    res: col('resources', 'resource names', 'assigned to', 'owner', 'resource'),
+    pct: col('% complete', 'percent complete', 'activity % complete', '% done', 'progress'),
+    notes: col('notes', 'comments', 'remarks'),
+  };
+  const project = newProject({ name });
   const cal = new WorkCalendar(project.calendar);
-  const warnings = [], body = rows.slice(1);
-  body.forEach(r => {
-    const d = durC >= 0 ? parseDuration(r[durC] || '1', project) : project.minutesPerDay;
+  const warnings = [...extra], body = rows.slice(head + 1), at = i => head + 1 + i;
+  const cell = (r, c) => (c >= 0 ? String(r[c] ?? '').trim() : '');
+
+  // outline levels
+  const wbsVals = body.map(r => cell(r, C.wbs)).filter(Boolean);
+  const wbsLevels = C.wbs >= 0 && wbsVals.length && new Set(wbsVals).size === wbsVals.length;
+  const grouped = body.some((r, i) => outline[at(i)] > 0);
+  const indented = C.name >= 0 && body.some((r, i) => indents[at(i)]?.[C.name] > 0);
+  const levelOf = (r, i) => {
+    if (C.level >= 0) return parseInt(cell(r, C.level), 10) || 1;
+    if (wbsLevels && cell(r, C.wbs)) return cell(r, C.wbs).split('.').length;
+    if (grouped) return (outline[at(i)] || 0) + 1;
+    if (indented) return (indents[at(i)]?.[C.name] || 0) + 1;
+    return 1;
+  };
+
+  const dates = [];
+  body.forEach((r, i) => {
+    const s = readDate(cell(r, C.start)), f = readDate(cell(r, C.finish));
+    let d = cell(r, C.dur) ? parseDuration(cell(r, C.dur), project) : null;
+    if (d == null && s != null && f != null) d = f < s ? 0 : cal.workBetween(startOfDay(s, cal), Math.max(startOfDay(s, cal), endOfDay(f, cal)));
+    const pctText = cell(r, C.pct);
+    let pct = parseFloat(pctText) || 0;
+    if (!pctText.includes('%') && pct > 0 && pct < 1) pct *= 100;
     const t = createTask(project, {
-      name: r[name] || '', level: level >= 0 ? parseInt(r[level], 10) || 1 : 1,
-      duration: d ?? project.minutesPerDay, milestone: d === 0,
-      percent: pctC >= 0 ? parseFloat(r[pctC]) || 0 : 0, notes: notesC >= 0 ? r[notesC] || '' : '',
+      name: cell(r, C.name), level: levelOf(r, i), duration: d ?? project.minutesPerDay, milestone: d === 0,
+      percent: Math.max(0, Math.min(100, pct)), notes: cell(r, C.notes),
     });
-    if (startC >= 0 && r[startC]) {
-      const day = parseDay(r[startC].slice(0, 10), new Date().getFullYear());
-      if (day != null) t.constraint = { type: 'SNET', date: startOfDay(day, cal) };
-    }
+    if (cell(r, C.id) && C.id !== C.wbs && !/^\d+$/.test(cell(r, C.id))) t.activityId = cell(r, C.id);
+    if (s != null) t.constraint = { type: 'SNET', date: startOfDay(s, cal) };
+    dates.push([s, f]);
     project.tasks.push(t);
   });
   normalizeLevels(project.tasks);
+
+  // links: by row number, or by the ID column when there is one
+  const rowOfId = new Map();
+  if (C.id >= 0) body.forEach((r, i) => { const v = cell(r, C.id); if (v && !rowOfId.has(v)) rowOfId.set(v, i + 1); });
+  const byId = text => text.split(/[,;]/).map(x => x.trim()).filter(Boolean).map(part => {
+    const m = part.match(/^(.+?)\s*(FS|SS|FF|SF)?\s*([+-]\s*\d.*)?$/i);
+    return m && rowOfId.has(m[1].trim()) ? `${rowOfId.get(m[1].trim())}${m[2] || ''}${(m[3] || '').replace(/\s+/g, '')}` : part;
+  }).join(', ');
+  let badLinks = 0;
   body.forEach((r, i) => {
-    const t = project.tasks[i];
-    if (predC >= 0 && r[predC]) {
-      try { t.preds = parsePreds(r[predC], project); } catch (e) { warnings.push(`Row ${i + 1}: ${e.message}`); }
+    const t = project.tasks[i], [s, f] = dates[i];
+    if (cell(r, C.pred)) {
+      try { t.preds = parsePreds(byId(cell(r, C.pred)), project); } catch (e) { badLinks++; if (badLinks === 1) warnings.push(`Row ${i + 1}: ${e.message}`); }
     }
-    if (resC >= 0 && r[resC]) t.assignments = parseAssignments(r[resC], project).assignments;
+    if (cell(r, C.res)) t.assignments = parseAssignments(cell(r, C.res), project).assignments;
+    if (t.percent > 0 && s != null) t.actualStart = startOfDay(s, cal);
+    if (t.percent >= 100 && (f != null || t.milestone)) t.actualFinish = t.milestone ? t.actualStart : Math.max(t.actualStart ?? 0, endOfDay(f, cal));
     if (t.preds.length && t.constraint.type === 'SNET') t.constraint = { type: 'ASAP', date: null };
   });
+  const first = dates.map(([s]) => s).filter(s => s != null).sort((a, b) => a - b)[0];
+  if (first != null) project.start = startOfDay(first, cal);
+  if (badLinks > 1) warnings.push(`${badLinks} rows had links that couldn't be read.`);
+  if (!project.tasks.length) throw new Error('The table has a header but no task rows.');
   return { project, warnings };
 }
 
