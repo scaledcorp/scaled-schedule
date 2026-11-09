@@ -13,10 +13,11 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').re
 const clean = s => String(s || '').trim().replace(/^["'“”]+|["'“”.!?]+$/g, '').trim();
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const q = t => `"${t.name || 'Untitled'}"`;
+const runs = (a, b) => (a === b ? `on ${fmtDate(a)}` : `runs ${fmtDate(a)} to ${fmtDate(b)}`);
 const HELP = 'I can add tasks ("add a 3-day testing task after Build and give it to Ana"), link them ("link Design to Build"), ' +
   'move them ("move Launch to March 15"), change durations ("make Build 5 days"), rename, delete, assign people and mark progress ' +
   '("Build is 50% done"). Ask me "what\'s on the critical path?", "who\'s over-booked?", "when does Launch finish?" or ' +
-  '"why did Launch move?". I always show you the plan first, and every change can be undone.';
+  '"why did Launch move?", "are we on track?" or "how should I estimate this?". I always show you the plan first, and every change can be undone.';
 
 export function findTask(project, ref) {
   let r = clean(ref).toLowerCase();
@@ -41,6 +42,7 @@ const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, ei
 const PERSON = "([A-Z][\\w'.-]*(?: [A-Z][\\w'.-]*)?)";
 const REWRITES = [
   // questions
+  [/^(?!(?:add|create|insert|new|rename|delete|remove|move|make|link|give|assign|push|pull|mark|set)\b).*\b(?:on time|on schedule|on track|behind schedule|realistic|risky|risks?|go wrong|confiden\w*|health\w*|sanity check|(?:look|looks|seem|seems) (?:ok|okay|right|good|reasonable|solid))\b.*$/i, 'how healthy is the plan?'],
   [/^.*\b(?:miss(?:ing)? the (?:deadline|date|finish)|make us late|making us late|bottleneck|holding up the (?:project|finish)|driving the (?:finish|end date))\b.*$/i, "what's on the critical path?"],
   [/^.*\bwho(?:'s| is| are)? (?:overloaded|slammed|swamped|too busy|double.?booked|overworked)\b.*$/i, "who's over-booked?"],
   [/^.*\b(?:when (?:are|will) we (?:be )?(?:done|finished)|when(?:'s| is) (?:the )?(?:end|finish|deadline)|what(?:'s| is) the (?:end|finish) date)\b.*$/i, 'when does the project finish?'],
@@ -300,7 +302,7 @@ function single(text, ctx) {
     const again = interpretCore(res.best, ctx);
     if (!again.unknown) return { ...again, as: res.best };
   }
-  if (n.rewrote && n.text.toLowerCase() !== text.trim().toLowerCase() && !res.unknown) res.as = n.text;
+  if (n.rewrote && n.text.toLowerCase() !== text.trim().toLowerCase() && !res.unknown && !/^how healthy/.test(n.text)) res.as = n.text;
   return res;
 }
 
@@ -348,7 +350,16 @@ function interpretCore(text, { project, computed }) {
     return { kind: 'answer', about: t.id, text: `Nothing is holding ${q(t)} back. It starts with the project.` };
   }
 
+  if (/^how healthy is the plan\??$/.test(low)) return health(project, computed);
+  if (/^(?:why|how|what|when|should|do|does|is|are|any|give me|tell me|can you explain)\b/.test(low)) {
+    const hit = KNOW.find(([re]) => re.test(s));
+    if (hit) return { kind: 'answer', text: hit[1] };
+  }
+
   // ---- edits
+  if ((m = s.match(new RegExp(`^(?:add|insert|put in|create) (?:a |an |some )?(?:${NUM}[ -]?${UNIT} )?(?:of )?(?:schedule |time )?(?:buffer|contingency|reserve)(?: time)?(?: ${NUM}[ -]?${UNIT})?(?: (?:before|ahead of) (.+?))?(?: ${NUM}[ -]?${UNIT})?$`, 'i')))) {
+    return planBuffer(m[1] ?? m[3] ?? m[6], m[2] ?? m[4] ?? m[7], m[5], project, computed);
+  }
   if ((m = s.match(/^(?:add|create|new|insert)\b(.*)$/i))) return planAdd(m[1], project);
   if ((m = s.match(/^(?:start|begin|kick off) (?:the |this )?(?:project|plan|schedule|job) (?:on |at )?(.+)$/i)) ||
       (m = s.match(/^(?:the )?(?:project|plan|schedule|job) (?:starts|begins|kicks off) (?:on )?(.+)$/i))) {
@@ -509,6 +520,121 @@ function suggest(s, project, computed) {
     text: "I'm not sure what you meant. Is it one of these? Tap one, or type it your way." };
 }
 
+// ---------------------------------------------------------------- planning sense
+// What Iguana knows about how big projects go right and wrong. The ideas come from How Big Things Get
+// Done (Bent Flyvbjerg and Dan Gardner), put in our own words: plan slowly and build quickly, start from
+// what done looks like, estimate from what similar work really took, test the uncertain parts early,
+// build from small repeatable pieces, and keep a visible buffer because most plans run long.
+const SOURCE = 'How Big Things Get Done';
+const TESTY = /\b(?:test\w*|trials?|pilot\w*|prototyp\w*|mock-?ups?|proofs?|dry runs?|inspect\w*|commission\w*|qa|validat\w*|verif\w*|samples?)\b/i;
+const BUFFER = /\b(?:buffer|contingency|reserve|margin|float)\b/i;
+const KNOW = [
+  [/\b(?:buffer|contingency|padding|pad|cushion|reserve)\b/i,
+    'A buffer is time set aside for the surprises every project runs into. Size it from how far similar past projects actually slipped, not from a gut feel, and keep it as one visible block before the finish instead of padding every task, so it gets spent on purpose. Say "add a schedule buffer" and I\'ll put one in.'],
+  [/\b(?:estimat\w*|how long should|guess(?:ing)? durations?|durations? right)\b/i,
+    'Start from how long similar work really took, on your past jobs or other people\'s, then adjust for what is truly different this time. Estimates made from the inside tend to run short, because we picture the version where nothing goes wrong.'],
+  [/\b(?:test\w* early|prototyp\w*|pilot|mock-?up|try it first|de-?risk\w*)\b/i,
+    'Put the newest or riskiest piece to a cheap test early: a mock-up, a pilot, a sample. Changing the plan costs little. Changing work that is half built costs a lot.'],
+  [/\b(?:break (?:it|this|that|them|things|work|tasks?|.+?) (?:up|down)|modul\w*|smaller pieces|chunks?)\b/i,
+    'Big work goes better as small pieces that repeat. Each repeat gets faster, estimates get sharper, and a slip shows up in days instead of months.'],
+  [/\b(?:unique|one of a kind|never been done|first of its kind)\b/i,
+    'Very few projects are truly one of a kind. Calling a project unique makes it easy to ignore what similar jobs teach about how long things take and what goes wrong.'],
+  [/\b(?:plan(?:ning)? (?:a |the |this )?(?:big|large|huge|whole|new)?\s*(?:project|job|build)|planning tips?|tips?|advice|best practices?|how (?:do|should) i plan)\b/i,
+    'Take your time on the plan and move fast once work starts. Begin with what done looks like and work backward, borrow durations from similar past work, test the uncertain parts early, and keep the build window short, since the longer work runs the more can go wrong.'],
+];
+
+// "Are we on track?" Reads the computed schedule for the things that usually sink big projects.
+export function health(project, computed) {
+  const k = t => computed.byId.get(t.id), cal = computed.calendar, mpd = project.minutesPerDay;
+  const leaves = project.tasks.filter(t => k(t) && !k(t).summary);
+  if (leaves.length < 3) return { kind: 'answer', text: "There isn't enough in the plan to judge yet. Add the main steps and ask me again." };
+  const risks = [], sugg = [], span = Math.max(1, cal.workBetween(computed.start, computed.finish));
+  const names = ts => ts.slice(0, 3).map(q).join(', ') + (ts.length > 3 ? ` and ${ts.length - 3} more` : '');
+  const behind = leaves.filter(t => k(t).ef <= todayMinutes() && (t.percent || 0) < 100);
+  if (behind.length) risks.push(`${behind.length === 1 ? 'One task should' : `${behind.length} tasks should`} be finished by today but ${behind.length === 1 ? "isn't" : "aren't"} marked done: ${names(behind)}.`);
+  leaves.filter(t => t.constraint?.type === 'FNLT' && k(t).ef > t.constraint.date)
+    .forEach(t => risks.push(`${q(t)} has to finish by ${fmtDate(t.constraint.date)} but runs to ${fmtDate(k(t).ef)}.`));
+  const crit = leaves.filter(t => k(t).critical && !t.milestone);
+  if (crit.length >= 3 && !leaves.some(t => BUFFER.test(t.name))) {
+    risks.push(`There's no buffer. ${crit.length} tasks have no slack, so any slip in them moves the finish, and most plans run longer than their estimates.`);
+    sugg.push('add a schedule buffer');
+  }
+  const tests = leaves.filter(t => TESTY.test(t.name)).sort((a, b) => k(a).es - k(b).es);
+  if (tests.length && leaves.length >= 6 && cal.workBetween(computed.start, k(tests[0]).es) / span > 0.75) {
+    risks.push(`The first test or trial, ${q(tests[0])}, doesn't start until the last quarter of the schedule, when problems cost the most to fix.`);
+  }
+  const long = leaves.filter(t => !t.milestone && t.duration >= 20 * mpd).sort((a, b) => b.duration - a.duration)[0];
+  if (long) risks.push(`${q(long)} is ${formatDuration(long.duration, project)} in one piece. Smaller pieces are easier to estimate and show a slip sooner.`);
+  const load = new Map();
+  crit.forEach(t => t.assignments.forEach(a => load.set(a.resourceId, (load.get(a.resourceId) || 0) + 1)));
+  const [rid, n] = [...load].sort((a, b) => b[1] - a[1])[0] || [];
+  if (n >= 3 && n * 2 >= crit.length) {
+    risks.push(`${project.resources.find(r => r.id === rid)?.name || 'One person'} is on ${n} of the ${crit.length} critical tasks. If they're out for a week, the finish moves a week.`);
+  }
+  if (!risks.length) {
+    return { kind: 'answer', text: `It finishes ${fmtDate(computed.finish)} and nothing stands out. The usual trap is estimates that assume nothing goes wrong, so check the longest tasks against how long similar work really took.` };
+  }
+  return { kind: 'answer', text: `It finishes ${fmtDate(computed.finish)}. ${risks.length === 1 ? "One thing I'd watch:" : "What I'd watch:"}`,
+    list: risks.slice(0, 3), suggestions: sugg };
+}
+
+// One short, timely note after a change, only when it matters, and each kind only once.
+export function coach(project, computed, { label = '', added = [], edited = [], finishMoved = 0, seen = new Set() } = {}) {
+  const k = t => computed.byId.get(t.id), mpd = project.minutesPerDay;
+  const byId = id => project.tasks.find(t => t.id === id);
+  const leaves = project.tasks.filter(t => k(t) && !k(t).summary);
+  const fresh = added.map(byId).filter(Boolean), touched = [...fresh, ...edited.map(byId).filter(Boolean)];
+  const ok = id => !seen.has(id);
+  const phase = fresh.find(t => k(t)?.summary), steps = fresh.filter(t => !k(t)?.summary);
+  if (ok('goal') && phase && steps.length >= 2 && !steps.some(t => t.milestone)) {
+    const last = steps[steps.length - 1];
+    return { id: 'goal', text: `Before the work starts, write down what "${phase.name}" done means: what you'll be able to see, test or hand over. A finish milestone keeps the steps pointed at it.`,
+      why: 'Good plans start from the goal and work backward to the first step.',
+      say: `add a ${phase.name} done milestone after ${project.tasks.filter(t => t.name === last.name).length === 1 ? last.name : `row ${idx(project, last) + 1}`}`, label: 'Add the milestone' };
+  }
+  const long = touched.find(t => !t.milestone && k(t) && !k(t).summary && t.duration >= 20 * mpd);
+  if (ok('long') && long) {
+    return { id: 'long', text: `${q(long)} is ${formatDuration(long.duration, project)} as one task. Splitting it into a few smaller steps makes it easier to estimate and shows a slip within days.`,
+      why: 'Big work built from small, repeatable pieces tends to come in closer to plan.' };
+  }
+  const tests = leaves.filter(t => TESTY.test(t.name)).sort((a, b) => k(a).es - k(b).es);
+  const span = Math.max(1, computed.calendar.workBetween(computed.start, computed.finish));
+  if (ok('test') && fresh.length && tests.length && leaves.length >= 6 && computed.calendar.workBetween(computed.start, k(tests[0]).es) / span > 0.75) {
+    return { id: 'test', text: `The first test, ${q(tests[0])}, comes near the very end. If there's a piece you're unsure about, a quick early trial of it is the cheapest place to find out.`,
+      why: 'A problem found in a mock-up costs days. Found at the end, it costs the schedule.' };
+  }
+  const crit = leaves.filter(t => k(t).critical && !t.milestone);
+  if (ok('buffer') && finishMoved > 0 && crit.length >= 4 && !leaves.some(t => BUFFER.test(t.name))) {
+    return { id: 'buffer', text: `Nothing on the critical path has slack, and there's no buffer before the finish, so every slip like this one lands on the end date.`,
+      why: 'Most plans run long. A buffer sized from how far similar projects slipped absorbs it.',
+      say: 'add a schedule buffer', label: 'Add a buffer' };
+  }
+  return null;
+}
+
+// "add a schedule buffer", "add a 5 day contingency before Launch": one visible block before the finish.
+function planBuffer(amount, unit, beforeRef, project, computed) {
+  const k = t => computed.byId.get(t.id), mpd = project.minutesPerDay;
+  const hasNext = new Set(project.tasks.flatMap(t => t.preds.map(x => x.id)));
+  const ends = project.tasks.filter(t => k(t) && !k(t).summary && !hasNext.has(t.id) && k(t).ef === computed.finish);
+  const end = beforeRef ? findTask(project, beforeRef) : ends.find(t => t.milestone) || ends[0];
+  if (!end) return beforeRef ? notFound(beforeRef) : { kind: 'answer', text: 'Add a few tasks first, then I can put a buffer before the finish.' };
+  const span = computed.calendar.workBetween(computed.start, computed.finish);
+  const size = amount ? durOf(amount, unit || 'days', project) : Math.max(mpd, Math.ceil((span * 0.1) / mpd) * mpd);
+  const before = end.milestone && end.preds.length > 0;
+  return plan('Add a schedule buffer', [
+    `Add a ${formatDuration(size, project)} "Schedule buffer" ${before ? 'before' : 'after'} ${q(end)}`,
+    !amount && 'Sized at about a tenth of the schedule. Adjust it to how far similar projects actually slipped',
+  ], p => {
+    const e = pick(p, end), at = before ? idx(p, e) : subtreeEnd(p.tasks, idx(p, e));
+    const b = insertTask(p, at, { name: 'Schedule buffer', level: e.level, duration: size });
+    b.notes = 'Time held for surprises. Use it on purpose, and note what it was spent on.';
+    if (before) { b.preds = e.preds; e.preds = [{ id: b.id, type: 'FS', lag: 0 }]; }
+    else b.preds = [{ id: e.id, type: 'FS', lag: 0 }];
+    return b.id;
+  }, { adds: true });
+}
+
 // "add a tentative review", "add an optional inspection, maybe": added with "Tentative" in the notes.
 function planAdd(rest, project) {
   let tentative = false;
@@ -592,8 +718,10 @@ export class Iguana {
       else if (act === 'do') this.run(+e.target.closest('[data-act]').dataset.i);
       else if (act === 'change') { this.input.value = this.pending[+e.target.closest('[data-act]').dataset.i]?.text || ''; this.input.focus(); }
       else if (act === 'undo') { this.app.store.undo(); this.say('Undone.'); }
+      else if (act === 'tips-off') { this.setTips(false); this.say('Tips are off. Say "turn on tips" to bring them back.'); }
     };
     this.pending = [];
+    this.tipsSeen = new Set();
     this.say("Hi, I'm Schedule Iguana. Tell me what to change, like \"add a 3-day testing task after Build\", or ask \"what's on the critical path?\" I show you the plan before I touch anything.");
   }
 
@@ -609,9 +737,24 @@ export class Iguana {
     return el;
   }
 
+  tipsOn() { try { return localStorage.getItem('scaled-schedule.iguana-tips') !== 'off'; } catch { return true; } }
+  setTips(on) { try { localStorage.setItem('scaled-schedule.iguana-tips', on ? 'on' : 'off'); } catch { /* private window */ } }
+
+  sayTip(tip) {
+    this.say(`${esc(tip.text)}<small class="ig-why">${esc(tip.why)} (${esc(SOURCE)})</small>
+      <div class="ig-sugg">${tip.say ? `<button data-say="${esc(tip.say)}">${esc(tip.label)}</button>` : ''}<button class="ig-link" data-act="tips-off">Turn off tips</button></div>`).classList.add('ig-tip');
+  }
+
   handle(text) {
     if (!text.trim()) return;
     this.say(esc(text), 'user');
+    const tog = text.match(/^\s*(?:please\s+)?(?:turn|switch)?\s*(on|off)?\s*(?:the\s+)?(?:tips|coaching|advice)\s*(on|off)?\s*[.!]*\s*$|^\s*(?:stop|no more|hide)\s+(?:the\s+)?tips\b|^\s*(?:show|bring back)\s+(?:the\s+)?tips\b/i);
+    if (tog) {
+      const on = !/\b(?:off|stop|no more|hide)\b/i.test(text);
+      this.setTips(on);
+      this.say(on ? "Tips are on. I'll mention something only when a change makes it worth knowing." : 'Tips are off. Say "turn on tips" to bring them back.');
+      return;
+    }
     const { project, computed } = this.app;
     const meant = this.resolve(text);
     const res = interpret(meant, { project, computed });
@@ -619,7 +762,7 @@ export class Iguana {
     if (res.as) this.say(`I read that as <b>“${esc(res.as)}”</b>.`);
     if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
     if (res.kind === 'answer') {
-      const el = this.say(esc(res.text));
+      const el = this.say(esc(res.text) + (res.list?.length ? `<ul>${res.list.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''));
       if (res.about != null) this.focusIds = [res.about];
       if (res.suggestions?.length) el.insertAdjacentHTML('beforeend', `<div class="ig-sugg">${res.suggestions.map(x => `<button data-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
       return;
@@ -629,7 +772,9 @@ export class Iguana {
     let newId;
     try { newId = res.run(copy, computed.calendar, computed); } catch (e) { this.say(esc(`I couldn't do that: ${e.message}`)); return; }
     const after = schedule(copy), lines = [...res.lines];
-    if (newId != null) { const n = after.byId.get(newId); lines.push(`Runs ${fmtDate(n.es)} to ${fmtDate(n.ef)}`); }
+    const had = new Set(project.tasks.map(t => t.id)), fresh = copy.tasks.filter(t => !had.has(t.id)).map(t => after.byId.get(t.id));
+    if (fresh.length) lines.push(cap(runs(Math.min(...fresh.map(n => n.es)), Math.max(...fresh.map(n => n.ef)))));
+    else if (newId != null) { const n = after.byId.get(newId); lines.push(cap(runs(n.es, n.ef))); }
     if (after.finish !== computed.finish) {
       const m = computed.calendar.workBetween(computed.finish, after.finish);
       lines.push(`Project finish moves to ${fmtDate(after.finish)} (${m > 0 ? '+' : '−'}${formatDuration(Math.abs(m), project)})`);
@@ -662,7 +807,12 @@ export class Iguana {
     this.focusIds = added.length ? added.map(t => t.id) : edited.length ? edited.map(t => t.id) : newId != null ? [newId] : this.focusIds;
     const days = m => `${m > 0 ? '+' : '−'}${formatDuration(Math.abs(m), project)}`;
     const parts = [];
-    if (added.length) parts.push(added.length === 1 ? `Added "${esc(added[0].name)}"` : `Added ${added.length} tasks`);
+    if (added.length) {
+      const heads = added.filter(t => c.byId.get(t.id)?.summary), steps = added.length - heads.length;
+      const span = runs(Math.min(...added.map(t => c.byId.get(t.id).es)), Math.max(...added.map(t => c.byId.get(t.id).ef)));
+      parts.push(heads.length === 1 ? `Added "${esc(heads[0].name)}" with ${steps} step${steps === 1 ? '' : 's'}, ${span}`
+        : added.length === 1 ? `Added "${esc(added[0].name)}", ${span}` : `Added ${added.length} tasks, ${span}`);
+    }
     if (moved.length) {
       const big = moved.reduce((a, b) => (Math.abs(b[1]) > Math.abs(a[1]) ? b : a));
       parts.push(`"${esc(big[0].name)}" now finishes ${esc(fmtDate(c.byId.get(big[0].id).ef))} (${days(big[1])})` +
@@ -675,6 +825,11 @@ export class Iguana {
     setTimeout(() => glow.forEach(id => this.app.gantt.els.get(id)?.bar.classList.add('flash')), 50);
     setTimeout(() => glow.forEach(id => this.app.gantt.els.get(id)?.bar.classList.remove('flash')), 1700);
     this.say(`Done.${parts.length ? ` ${parts.join('. ')}.` : ''} <button class="ig-link" data-act="undo">Undo</button>`);
+    if (this.tipsOn()) {
+      const tip = coach(project, c, { label: p.label, added: added.map(t => t.id), edited: edited.map(t => t.id),
+        finishMoved: c.finish - before, seen: this.tipsSeen });
+      if (tip) { this.tipsSeen.add(tip.id); this.sayTip(tip); }
+    }
   }
 
   // "it", "that", "them", "those" mean what Iguana just added or changed (or the selection).

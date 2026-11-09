@@ -7,7 +7,7 @@ import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
-import { Iguana, interpret, readDay } from '../app/js/ui/iguana.js';
+import { coach, Iguana, interpret, readDay } from '../app/js/ui/iguana.js';
 import { exportInversionModel } from '../app/js/io/inversion.js';
 
 const results = [];
@@ -351,6 +351,37 @@ test('Schedule Iguana: hedges, deadlines, shifts, ASAP, tentative and "it"', () 
   eq(Iguana.prototype.resolve.call(fake([T('Test').id]), 'push it 2 days'), 'push Test 2 days');
   eq(Iguana.prototype.resolve.call(fake([T('Review').id, T('Sign-off').id]), 'give them to Ana'), 'give Review to Ana\ngive Sign-off to Ana');
   eq(Iguana.prototype.resolve.call(fake([T('Test').id]), 'add QA this week and give it to Ana'), 'add QA this week and give it to Ana');
+});
+
+test('Schedule Iguana: planning sense (health, buffer, know-how, tips)', () => {
+  const p = mini([['Design', 5], ['Build', 25], ['Paint', 5], ['Test', 3], ['Handover', 2], ['Launch', 0]]);
+  for (let i = 1; i < p.tasks.length; i++) p.tasks[i].preds = [{ id: p.tasks[i - 1].id, type: 'FS', lag: 0 }];
+  const ctx = () => ({ project: p, computed: schedule(p) });
+  const run = q => { const r = interpret(q, ctx()); if (r.kind !== 'plan') throw new Error(`${q}: ${r.text}`); const c = schedule(p); r.run(p, c.calendar, c); return r; };
+  const T = n => p.tasks.find(t => t.name === n);
+  const h = interpret('are we on track?', ctx());
+  eq([h.kind, h.list.length, h.suggestions[0]], ['answer', 3, 'add a schedule buffer']);
+  eq(h.list.some(l => l.includes('no buffer')) && h.list.some(l => l.includes('"Test"')) && h.list.some(l => l.includes('"Build"')), true);
+  eq(interpret('how should I estimate the build?', ctx()).text.includes('similar work really took'), true);
+  eq(interpret('add a risk review after Build', ctx()).kind, 'plan');   // an edit, not a health question
+  const before = schedule(p).finish;
+  run('add a schedule buffer');
+  const s = schedule(p), buf = T('Schedule buffer');
+  eq([buf.duration, T('Launch').preds[0].id === buf.id, buf.preds[0].id === T('Handover').id], [480 * 4, true, true]);
+  eq(s.calendar.workBetween(before, s.finish), 480 * 4);
+  run('add 2 days of contingency before Handover');
+  eq(p.tasks.filter(t => t.name === 'Schedule buffer').length, 2);
+  // tips: a new phase without a finish line, then quiet once seen
+  const c0 = schedule(p), had = new Set(p.tasks.map(t => t.id));
+  run('Create a schedule for the punch list: walk-through 1 day, then fixes 3 days');
+  const c1 = schedule(p), added = p.tasks.filter(t => !had.has(t.id)).map(t => t.id);
+  const tip = coach(p, c1, { label: 'Add a phase', added, finishMoved: c1.finish - c0.finish });
+  eq([tip.id, tip.say.startsWith('add a Punch list done milestone after ')], ['goal', true]);
+  run(tip.say);
+  eq(p.tasks.some(t => t.name === 'Punch list done' && t.milestone), true);
+  eq(coach(p, c1, { added, seen: new Set(['goal']) })?.id, 'test');      // Test sits in the last quarter
+  eq(coach(p, c1, { added, seen: new Set(['goal', 'test']) })?.id ?? null, null);
+  eq(coach(p, schedule(p), { edited: [T('Build').id] }).id, 'long');
 });
 
 const pass = results.filter(r => r[1]).length;

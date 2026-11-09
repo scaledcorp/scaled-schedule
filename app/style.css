@@ -287,6 +287,11 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0
   font-size: 12.5px; cursor: pointer; transition: transform .18s var(--spring), background .15s; }
 .ig-sugg button:hover { background: rgba(18,184,134,.12); }
 .ig-sugg button:active { transform: scale(.94); }
+/* a planning tip: same bubble, a thin green edge, the reason in small type underneath */
+.ig-msg.ig-tip { border-left: 3px solid #12B886; }
+.ig-why { display: block; margin-top: 5px; font-size: 12px; color: var(--muted); }
+.ig-sugg .ig-link { border: 0; background: none; padding: 5px 4px; color: var(--muted); font-weight: 500; }
+.ig-sugg .ig-link:hover { background: none; color: var(--ink); }
 .ig-input { display: flex; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
 .ig-input input { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; background: var(--pane); }
 .ig-input input:focus { outline: none; border-color: #12B886; box-shadow: 0 0 0 3px rgba(18,184,134,.25); }
