@@ -5,6 +5,7 @@ import { deleteTasks, fmtDate, fmtHours, fmtMoney, formatDuration, insertTask, p
   parseDuration, startOfDay, subtreeEnd, todayMinutes, yearOf } from '../model.js';
 import { schedule } from '../scheduler.js';
 import { setPercent } from './panels.js';
+import { WorkCalendar } from '../calendar.js';
 
 const NUM = '(\\d+(?:\\.\\d+)?)';
 const UNIT = '(minutes?|mins?|hours?|hrs?|h|days?|d|weeks?|wks?|w|months?|mo)';
@@ -156,19 +157,39 @@ function compound(parts, ctx) {
 const COUNT = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
 const CHAIN_WORDS = /\bthen\b|->|→|\bfollowed by\b|\bin (?:that )?order\b|\bone after (?:the )?other\b/i;
 
-// "design 3 days, then build (5 days) and a launch milestone" -> items, and whether they run in order.
+// "design 3 days (Ana), then wait 2 days, then plumbing and electrical at the same time, then a launch
+// milestone" -> groups of items (a group runs at the same time), gaps before items, and whether the
+// groups run in order.
+const PARALLEL = /\b(?:at the same time|in parallel|together|simultaneously)\b/i;
 function parseItems(list, project) {
   const chain = CHAIN_WORDS.test(list);
   const durRe = new RegExp(`\\(?\\s*${NUM}[ -]?${UNIT}\\b\\s*\\)?`, 'i');
-  const items = list.replace(/\b(?:in (?:that )?order|one after (?:the )?other|at the (?:end|start))\b/ig, ' ')
-    .split(/\s*(?:,|->|→|\bthen\b|\bfollowed by\b|\band\b)\s*/i).map(x => x.trim()).filter(Boolean).map(x => {
-      const dm = x.match(durRe);
-      const milestone = /\bmilestone\b/i.test(x);
-      let name = x.replace(durRe, ' ').replace(/\b(?:a|an|the|new|task|tasks|step|milestone|called|named|of)\b/gi, ' ');
-      name = cap(clean(name.replace(/\s+/g, ' ')));
-      return name ? { name, dur: milestone ? 0 : dm ? durOf(dm[1], dm[2], project) : null, milestone } : null;
-    }).filter(Boolean);
-  return { items, chain };
+  const lagRe = new RegExp(`^(?:wait|pause|leave|gap of|allow)\\s+${NUM}[ -]?${UNIT}\\b.*$|^${NUM}[ -]?${UNIT}\\s+(?:gap|break|pause|wait|later)\\b,?\\s*(.*)$`, 'i');
+  const item = raw => {
+    let x = raw, who = null;
+    x = x.replace(/\s*\(\s*([^)]+?)\s*\)\s*$/, (m, w) => (/^\d|^(?:one|two|three|four|five|half)\b/i.test(w) ? m : ((who = w), ' ')));
+    x = x.replace(/\s+(?:by|assigned to|owner:?)\s+(.+)$/i, (m, w) => ((who = clean(w)), ' '));
+    x = x.replace(/\s+(?:for|with)\s+([A-Z][\w'.-]*(?:\s+[A-Z][\w'.-]*)?)\s*$/, (m, w) => ((who = w), ' '));
+    const dm = x.match(durRe), milestone = /\bmilestone\b/i.test(x);
+    let name = x.replace(durRe, ' ').replace(/\b(?:a|an|the|new|task|tasks|step|milestone|called|named|of)\b/gi, ' ');
+    name = cap(clean(name.replace(/\s+/g, ' ')));
+    return name ? { name, dur: milestone ? 0 : dm ? durOf(dm[1], dm[2], project) : null, milestone, who } : null;
+  };
+  const tokens = list.replace(/\b(?:in (?:that )?order|one after (?:the )?other|at the (?:end|start))\b/ig, ' ')
+    .split(chain ? /\s*(?:,|->|→|\bthen\b|\bfollowed by\b)\s*/i : /\s*(?:,|->|→)\s*/).map(x => x.trim()).filter(Boolean);
+  const groups = [];
+  let lag = 0;
+  for (let t of tokens) {
+    const lm = t.match(lagRe);
+    if (lm) { lag += durOf(lm[1] ?? lm[3], lm[2] ?? lm[4], project); t = (lm[5] || '').trim(); if (!t) continue; }
+    const together = PARALLEL.test(t) || /^both\b/i.test(t);
+    const parts = t.replace(PARALLEL, ' ').replace(/^both\s+/i, '').split(/\s*(?:\band\b|&)\s*/i).map(item).filter(Boolean);
+    if (!parts.length) continue;
+    if (lag) { parts.forEach(p => { p.lag = lag; }); lag = 0; }
+    if (chain && together) groups.push(parts); else parts.forEach(p => groups.push([p]));
+  }
+  const items = groups.flat();
+  return { items, groups: chain ? groups : [items], chain };
 }
 
 // "three new tasks", "2 milestones: A and B", or any list of two or more tasks.
@@ -184,25 +205,37 @@ function parseMany(r, project) {
   return null;
 }
 
-function planMany({ items, chain }, { after = null, who = null, phase = null, chainFrom = null }, project) {
-  const fmt = it => (it.milestone ? `${it.name} (milestone)` : `${it.name} (${formatDuration(it.dur ?? project.minutesPerDay, project)})`);
+function planMany(spec, { after = null, who = null, phase = null, chainFrom = null, startDay = null }, project) {
+  const chain = spec.chain;
+  const groups = spec.groups || (chain ? spec.items.map(i => [i]) : [spec.items]);
+  const items = groups.flat();
+  const fmt = it => `${it.name} (${it.milestone ? 'milestone' : formatDuration(it.dur ?? project.minutesPerDay, project)}${it.who ? `, ${it.who}` : ''}${it.lag ? `, after a ${formatDuration(it.lag, project).replace(/s$/, '')} gap` : ''})`;
   const lines = [
     `${phase ? `Add a "${phase}" phase with` : 'Add'} ${items.length} tasks: ${items.slice(0, 6).map(fmt).join(', ')}${items.length > 6 ? `, and ${items.length - 6} more` : ''}`,
-    chain ? 'Each one starts after the one before' : after ? 'Side by side' : null,
-    after && `First one starts after "${after.name}"`, who && `Assign ${who}`,
+    chain ? (groups.some(g => g.length > 1) ? 'In order, with some steps at the same time' : 'Each one starts after the one before') : after ? 'Side by side' : null,
+    after && `First one starts after "${after.name}"`,
+    startDay != null && `Starting no earlier than ${fmtDate(startDay * 1440)}`,
+    who && `Assign ${who}`,
   ];
-  return plan(phase ? 'Add a phase' : 'Add tasks', lines, p => {
+  return plan(phase ? 'Add a phase' : 'Add tasks', lines, (p, cal) => {
+    cal = cal || new WorkCalendar(p.calendar);
     let i = after ? subtreeEnd(p.tasks, idx(p, after)) : p.tasks.length;
     let level = after ? after.level : 1;
     const startAfter = after ? after.id : chainFrom;
     if (phase) { insertTask(p, i++, { name: phase, level }); level++; }
-    let prev = null, lastId = null;
-    for (const it of items) {
-      const t = insertTask(p, i++, { name: it.name, level, duration: it.dur ?? p.minutesPerDay, milestone: !!it.milestone });
-      const from = chain ? (prev ?? startAfter) : startAfter;
-      if (from) t.preds.push({ id: from, type: 'FS', lag: 0 });
-      if (who) t.assignments = parseAssignments(who, p).assignments;
-      prev = t.id; lastId = t.id;
+    let prev = startAfter ? [startAfter] : [], lastId = null;
+    for (const g of groups) {
+      const ids = [];
+      for (const it of g) {
+        const t = insertTask(p, i++, { name: it.name, level, duration: it.dur ?? p.minutesPerDay, milestone: !!it.milestone });
+        const from = chain ? prev : startAfter ? [startAfter] : [];
+        from.forEach(id => t.preds.push({ id, type: 'FS', lag: it.lag || 0 }));
+        if (!from.length && startDay != null) t.constraint = { type: 'SNET', date: cal.nextWorkStart(startOfDay(startDay, cal)) };
+        const w = it.who || who;
+        if (w) t.assignments = parseAssignments(w, p).assignments;
+        ids.push(t.id); lastId = t.id;
+      }
+      if (chain) prev = ids;
     }
     return lastId;
   }, { adds: true });
@@ -215,10 +248,23 @@ function planBlock(text, { project, chain }) {
   if (!m) return null;
   const listed = parseItems(m[2], project);
   if (listed.items.length < 2) return null;
-  if (!/\b(?:at the same time|in parallel|together|side by side)\b/i.test(m[2])) listed.chain = true;
-  const phase = cap(clean(m[1].replace(/^(?:the|a|an|our|my)\s+/i, ''))) || null;
-  const lastLeaf = [...project.tasks].reverse().find((t, k, arr) => !project.tasks[project.tasks.indexOf(t) + 1] || project.tasks[project.tasks.indexOf(t) + 1].level <= t.level);
-  return planMany(listed, { phase, chainFrom: chain && lastLeaf ? lastLeaf.id : null }, project);
+  if (!listed.chain && !/\b(?:side by side|all at once)\b/i.test(m[2])) {
+    listed.chain = true;
+    listed.groups = listed.items.map(it => [it]);
+  }
+  let startDay = null;
+  const left = m[1].replace(/\s*\b(?:starting|beginning|start(?:ing)? on|kicking off|from)\s+(.+?)\s*$/i, (x, d) => {
+    const day = readDay(d, yearOf(project.start));
+    if (day == null) return x;
+    startDay = day;
+    return '';
+  });
+  const phase = cap(clean(left.replace(/^(?:the|a|an|our|my)\s+/i, ''))) || null;
+  const lastLeaf = [...project.tasks].reverse().find(t => {
+    const next = project.tasks[project.tasks.indexOf(t) + 1];
+    return !next || next.level <= t.level;
+  });
+  return planMany(listed, { phase, startDay, chainFrom: chain && lastLeaf ? lastLeaf.id : null }, project);
 }
 
 function single(text, ctx) {
@@ -282,6 +328,24 @@ function interpretCore(text, { project, computed }) {
 
   // ---- edits
   if ((m = s.match(/^(?:add|create|new|insert)\b(.*)$/i))) return planAdd(m[1], project);
+  if ((m = s.match(/^(?:start|begin|kick off) (?:the |this )?(?:project|plan|schedule|job) (?:on |at )?(.+)$/i)) ||
+      (m = s.match(/^(?:the )?(?:project|plan|schedule|job) (?:starts|begins|kicks off) (?:on )?(.+)$/i))) {
+    const day = readDay(m[1], yearOf(project.start));
+    if (day == null) return { kind: 'answer', text: `I couldn't read "${clean(m[1])}" as a date. Try "March 1" or 3/1/27.` };
+    return plan('Set project start', [`Start the project on ${fmtDate(day * 1440)}`], (p, cal) => {
+      p.start = (cal || new WorkCalendar(p.calendar)).nextWorkStart(day * 1440);
+    });
+  }
+  if ((m = s.match(new RegExp(`^(.+?) (?:starts?|begins?|can start|should start|kicks off) ${NUM} ?${UNIT} after (.+?)(?: (?:finishes|is done|ends|wraps(?: up)?))?$`, 'i')))) {
+    const to = findTask(project, m[1]), from = findTask(project, m[4]);
+    if (!to) return notFound(m[1]);
+    if (!from) return notFound(m[4]);
+    const lag = durOf(m[2], m[3], project);
+    return plan('Link with a gap', [`${q(to)} starts ${formatDuration(lag, project)} after ${q(from)} finishes`], p => {
+      const succ = pick(p, to), ex = succ.preds.find(x => x.id === from.id);
+      if (ex) { ex.lag = lag; ex.type = 'FS'; } else succ.preds.push({ id: from.id, type: 'FS', lag });
+    });
+  }
   if ((m = s.match(/^(?:link|connect) (.+?) (?:to|->|then|before|with) (.+)$/i)) || (m = s.match(/^make (.+?) depend on (.+)$/i))) {
     const [a, b] = /depend/i.test(s) ? [m[2], m[1]] : [m[1], m[2]];
     const from = findTask(project, a), to = findTask(project, b);

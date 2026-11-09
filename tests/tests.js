@@ -302,6 +302,26 @@ test('Schedule Iguana adds several tasks, chains and phases in one request', () 
   eq(show(s.finish), '2027-01-14T17:00');
 });
 
+test('Schedule Iguana: gaps, same-time steps, start dates and people', () => {
+  const p = mini([]);
+  const ctx = () => ({ project: p, computed: schedule(p) });
+  const run = q => { const r = interpret(q, ctx()); if (r.kind !== 'plan') throw new Error(`${q}: ${r.text}`); const c = schedule(p); r.run(p, c.calendar, c); return r; };
+  const T = n => p.tasks.find(t => t.name === n);
+  run('add framing 3 days, then wait 2 days, then drywall 4 days, then 1 day later paint 2 days');
+  eq([T('Drywall').preds[0].id === T('Framing').id, T('Drywall').preds[0].lag, T('Paint').preds[0].lag], [true, 960, 480]);
+  run('add rough-in 1 day, then plumbing 2 days and electrical 3 days at the same time, then insulation 2 days');
+  eq([T('Plumbing').preds[0].id, T('Electrical').preds[0].id].every(id => id === T('Rough-in').id), true);
+  eq(T('Insulation').preds.map(x => x.id).sort(), [T('Plumbing').id, T('Electrical').id].sort());
+  run('Create a schedule for the deck starting Feb 1 2027: footings 2 days (Ana), then framing 3 days by Ben');
+  const s = schedule(p);
+  eq([T('Deck').level, T('Footings').level, show(s.byId.get(T('Footings').id).es)], [1, 2, '2027-02-01T08:00']);
+  eq(['Footings', 'Framing'].map(n => p.resources.find(r => r.id === p.tasks.filter(t => t.name === n).pop().assignments[0].resourceId).name), ['Ana', 'Ben']);
+  run('paint starts 3 days after drywall');
+  eq(T('Paint').preds.find(x => x.id === T('Drywall').id).lag, 1440);
+  run('start the project on Jan 11 2027');
+  eq(show(p.start), '2027-01-11T08:00');
+});
+
 const pass = results.filter(r => r[1]).length;
 document.getElementById('summary').textContent = `${pass} of ${results.length} passed`;
 document.getElementById('summary').className = pass === results.length ? 'ok' : 'bad';
