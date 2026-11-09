@@ -41,7 +41,8 @@ export function reviewImport({ fileName, table, result }) {
       return `<label><span title="${esc(h)}">${esc(h) || `Column ${c + 1}`}</span><select data-col="${c}">
         <option value="">Not used</option>${Object.entries(FIELDS).map(([f, label]) => `<option value="${f}"${f === field ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`;
     }).join('')}</div>` : '';
-    const source = table.shapes ? 'Dates were read from where each bar sits on the timeline, so check them.' : 'Each column below shows what it was read as; change one if it\'s wrong.';
+    const ocr = table.ocr ? 'The text was read from a picture, so check names and numbers too. ' : '';
+    const source = ocr + (table.shapes ? 'Dates were read from where each bar sits on the timeline, so check them.' : 'Each column below shows what it was read as; change one if it\'s wrong.');
     const d = dialog(`<div class="dlg-body review">
         <h2 id="rvTitle"></h2>
         <p class="hint">${esc(source)} <span id="rvAmber"></span></p>
@@ -67,7 +68,7 @@ export function reviewImport({ fileName, table, result }) {
       const map = {};
       d.querySelectorAll('select[data-col]').forEach(o => { if (o.value) map[o.value] = +o.dataset.col; });
       try {
-        current = importTable(table.rows, { name: table.name, indents: table.indents, guess: table.guess || [], map });
+        current = importTable(table.rows, { name: table.name, indents: table.indents, guess: table.guess || [], low: table.low || [], map });
         render();
       } catch (e) {
         current = null;

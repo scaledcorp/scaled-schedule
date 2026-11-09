@@ -11,6 +11,7 @@ import { importXLSX } from '../app/js/io/xlsx.js';
 import { decodeText } from '../app/js/io/files.js';
 import { importPDF } from '../app/js/io/pdf.js';
 import { importDOCX, importPPTX } from '../app/js/io/office.js';
+import { importImage } from '../app/js/io/ocr.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV, importTable } from '../app/js/io/csv.js';
 import { coach, Iguana, interpret, readDay } from '../app/js/ui/iguana.js';
 import { exportInversionModel } from '../app/js/io/inversion.js';
@@ -565,7 +566,7 @@ test('a timeline drawn on a slide: dates from bar positions, groups, a milestone
   eq(brief(result.project, result.guessed), [
     '1 | Engineering | 1 |  |  | 01-04 | 02-05 | start/finish/dur', '2 | Design pump skid | 10 |  |  | 01-04 | 01-15 | start/finish',
     '2 | Procure pumps | 15 |  |  | 01-18 | 02-05 | start/finish', '1 | Construction | 1 |  |  | 02-08 | 02-19 | start/finish/dur',
-    '2 | Set new pumps | 4 |  |  | 02-08 | 02-11 | start/finish', '2 | Pipe and wire | 7 |  |  | 02-10 | 02-18 | start/finish',
+    '2 | Set new pumps | 4 |  |  | 02-08 | 02-11 | start/finish', '2 | Wiring | 7 |  |  | 02-10 | 02-18 | start/finish',
     '2 | Ready for service | M |  |  | 02-19 | 02-19 | start/finish']);
 });
 test('review: a column read as the wrong field can be changed', async () => {
@@ -575,6 +576,52 @@ test('review: a column read as the wrong field can be changed', async () => {
   // read Predecessors as Notes instead, and Finish as nothing
   const again = importTable(t.rows, { name: t.name, indents: t.indents, map: { name: 0, dur: 1, start: 2, notes: 4 } });
   eq([again.project.tasks[1].preds.length, again.project.tasks[1].notes, again.map.finish], [0, '1', -1]);
+});
+
+// ---------------------------------------------------------------- pictures and scans (OCR)
+// A screenshot of the P6-style report, the Project-style report as a tilted, noisy, image-only PDF
+// (a "scan"), and the timeline slide exported as a picture. Text is read with Tesseract, so a few
+// characters can come out wrong: what matters is that the structure comes through and that anything
+// unsure is marked for review.
+const pics = Promise.all(['pump-house-p6.png', 'pump-house-scan.pdf', 'pump-house-timeline.png'].map(fixture));
+const png = buf => new Blob([buf], { type: 'image/png' });
+await Promise.all(pending);   // OCR is heavy: start these once the quick tests are done
+test('picture of a P6 report: OCR, then the same table reader', async () => {
+  const [p6] = await pics;
+  const { table, result } = await importImage(png(p6), 'pump-house-p6.png');
+  const t = result.project.tasks;
+  eq(table.ocr, true);
+  eq(t.map(x => [x.level, x.name.replace('—', '–'), x.activityId || '']), [
+    [1, 'Pump House Upgrade', ''], [2, 'Engineering', ''], [3, 'Notice to proceed', 'A1000'], [3, 'Design pump skid', 'A1010'],
+    [3, 'Procure pumps', 'A1020'], [3, 'Project management', 'A1080'], [2, 'Construction', ''], [3, 'Mechanical', ''],
+    [4, 'Demolish old skid', 'A1030'], [4, 'Set new pumps', 'A1040'], [4, 'Pipe and wire – Unit 2', 'A1050'],
+    [4, 'Test and turnover', 'A1060'], [4, 'Ready for service', 'A1070']]);
+  // every duration is right, or marked for review
+  const want = [35, 25, 0, 10, 15, 30, 19, 18, 5, 4, 6, 3, 0];
+  const off = t.map((x, i) => (x.milestone ? 0 : x.duration / 480) === want[i] || result.guessed[i].has('dur') ? null : x.name).filter(Boolean);
+  eq(off, []);
+  eq(t.filter((x, i) => (x.milestone ? 0 : x.duration / 480) === want[i]).length >= 11, true);
+  eq([t[3].percent, t[4].percent], [100, 33]);
+});
+test('a scanned PDF (no text in it) is read with OCR', async () => {
+  const [, scan] = await pics;
+  const { table, result } = await importPDF(scan, 'pump-house-scan.pdf');
+  const t = result.project.tasks;
+  eq(table.ocr, true);
+  eq(t.map(x => x.level), [1, 2, 3, 3, 2, 3, 3, 3, 3, 2]);
+  eq(t[7].name.startsWith('Pipe and wire'), true);
+  eq(t[7].name.endsWith('instrument loops)'), true);
+  eq(t.map(x => (x.milestone ? 'M' : x.duration / 480)), [35, 25, 10, 15, 19, 5, 4, 6, 3, 'M']);
+});
+test('picture of a timeline: bars found by color, names beside and inside them', async () => {
+  const [, , timeline] = await pics;
+  const { table, result } = await importImage(png(timeline), 'pump-house-timeline.png');
+  eq([table.shapes, table.ocr], [true, true]);
+  eq(brief(result.project), [
+    '1 | Engineering | 1 |  |  | 01-04 | 02-05 | ', '2 | Design pump skid | 10 |  |  | 01-04 | 01-15 | ',
+    '2 | Procure pumps | 15 |  |  | 01-18 | 02-05 | ', '1 | Construction | 1 |  |  | 02-08 | 02-19 | ',
+    '2 | Set new pumps | 4 |  |  | 02-08 | 02-11 | ', '2 | Wiring | 7 |  |  | 02-10 | 02-18 | ',
+    '2 | Ready for service | M |  |  | 02-19 | 02-19 | ']);
 });
 
 await Promise.all(pending);
@@ -591,6 +638,7 @@ test('every reader runs offline: no network while importing', async () => {
     await importPDF(more[0], 'x.pdf');
     await importPPTX(more[3], 'x.pptx');
     await importDOCX(more[4], 'x.docx');
+    await importImage(png((await pics)[2]), 'x.png');
   } finally { window.fetch = realFetch; }
   const after = performance.getEntriesByType('resource').filter(e => !e.name.startsWith(`${location.origin}/app/`)).length;
   eq([calls, after - before], [0, 0]);

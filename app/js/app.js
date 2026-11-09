@@ -19,7 +19,9 @@ import { importDOCX, importPPTX } from './io/office.js';
 import { reviewImport } from './ui/review.js';
 
 // PDF.js is about 1.7 MB, so it loads only when someone opens a PDF.
-const importPDF = async (buf, name) => (await import('./io/pdf.js')).importPDF(buf, name);
+const importPDF = async (buf, name, progress) => (await import('./io/pdf.js')).importPDF(buf, name, progress);
+// Tesseract.js and its English model are about 7 MB, so they load only for pictures and scans.
+const importImage = async (blob, name, progress) => (await import('./io/ocr.js')).importImage(blob, name, progress);
 
 const P = {
   open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
@@ -426,7 +428,8 @@ class App {
           'application/json': ['.sched', '.json'], 'application/xml': ['.xml'], 'text/csv': ['.csv'], 'text/plain': ['.xer'],
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'], 'application/vnd.ms-project': ['.mpp'], 'application/pdf': ['.pdf'],
           'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] } }] });
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+          'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'] } }] });
         return this.openFile(await h.getFile(), h);
       } catch (e) { if (e.name === 'AbortError') return; }
     }
@@ -440,8 +443,8 @@ class App {
     if (ext === 'mpp') return info('Save it from Project as XML', 'Microsoft Project keeps .mpp files in its own closed format. In Project, choose File, Save As, and pick "XML Format (*.xml)". Then open that .xml here. Every file is read on this computer and never uploaded.');
     if (ext === 'xls' || ext === 'xlsb') return info('Save it as .xlsx', 'In Excel, choose File, Save As, and pick "Excel Workbook (*.xlsx)" or CSV. Then open that file here.');
     if (ext === 'ppt' || ext === 'doc') return info(`Save it as .${ext}x`, `Older ${ext === 'ppt' ? 'PowerPoint' : 'Word'} files use a format the browser can't read. Open it and choose File, Save As, and pick the .${ext}x format. Then open that file here.`);
-    if (/^(png|jpe?g|gif|bmp|tiff?|webp|heic)$/.test(ext)) return this.toast('Reading schedules from pictures is coming next. For now, open a PDF, slides, Word, P6, Project, Excel or CSV file.');
-    if (/^(pdf|pptx|docx)$/.test(ext)) return this.openDocument(file, ext);
+    if (/^(tiff?|heic|heif)$/.test(ext)) return info('Save it as PNG or JPEG', `Browsers can't open .${ext} pictures. Save or export it as PNG or JPEG (or take a screenshot), then open that here.`);
+    if (/^(pdf|pptx|docx|png|jpe?g|gif|bmp|webp)$/.test(ext)) return this.openDocument(file, ext);
     if (this.store.dirty && this.project.tasks.length && !(await ask(`Open ${name}?`, 'Your current project is autosaved in this browser, but not saved to a file.', [{ label: 'Cancel', value: false }, { label: 'Open it', value: true, primary: true }]))) return;
     try {
       let project, warnings = [], keep = false;
@@ -469,8 +472,14 @@ class App {
     const name = file.name;
     try {
       this.toast(`Reading ${name}…`);
+      // reading text off a picture takes a few seconds a page: say so once it starts
+      let told = 0;
+      const progress = m => {
+        if (m.status === 'page' && m.page > told) { told = m.page; this.toast(m.pages > 1 ? `Reading the text on page ${m.page} of ${m.pages}…` : 'Reading the text in the picture. This takes a few seconds…'); }
+      };
       const buf = await file.arrayBuffer();
-      const read = ext === 'pdf' ? await importPDF(buf, name) : ext === 'pptx' ? await importPPTX(buf, name) : await importDOCX(buf, name);
+      const read = ext === 'pdf' ? await importPDF(buf, name, progress) : ext === 'pptx' ? await importPPTX(buf, name)
+        : ext === 'docx' ? await importDOCX(buf, name) : await importImage(new Blob([buf], { type: file.type }), name, progress);
       const picked = await reviewImport({ fileName: name, ...read });
       if (!picked) return;
       const before = { project: structuredClone(this.project), fileName: this.store.fileName, handle: this.store.fileHandle };
