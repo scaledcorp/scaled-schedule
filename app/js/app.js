@@ -6,7 +6,6 @@ import { ask, menu, openPalette, openSettings, renderDetails, renderResources, s
 import { deleteTasks, endOfDay, fmtDate, fmtHours, fmtMoney, formatDuration, indent, indexOfId, insertTask, isFamily,
   linkTasks, moveBlock, newProject, outdent, parseAssignments, parseDay, parseDuration, parsePreds, startOfDay,
   subtreeEnd, unlinkTasks, yearOf } from './model.js';
-import { SAMPLE } from './sample.js';
 import { Iguana } from './ui/iguana.js';
 import { exportMSPDI, importMSPDI } from './io/mspdi.js';
 import { exportXER } from './io/xer.js';
@@ -285,7 +284,6 @@ class App {
       c('new', 'New project'), c('open', 'Open a file', 'Ctrl+O'), c('save', 'Save', 'Ctrl+S'), c('saveAs', 'Save as'),
       c('exportMSPDI', 'Export to Microsoft Project (XML)'), c('exportXER', 'Export to Primavera P6 (XER)'),
       c('exportCSV', 'Export to CSV'), c('exportJira', 'Export for Jira (CSV)'), c('exportInversionModel', 'Export an Inversion model (JSON)'), c('exportInversion', 'Export for Inversion import (CSV)'),
-      c('sample', 'Open the sample project'),
       c('critical', 'Show or hide the critical path'), c('saveBaseline', 'Save a baseline'), c('toggleBaseline', 'Show or hide the baseline'),
       c('zoomIn', 'Zoom in'), c('zoomOut', 'Zoom out'), c('scrollToTask', 'Scroll to the selected task'),
       c('collapseAll', 'Collapse all summaries'), c('expandAll', 'Expand all summaries'),
@@ -348,11 +346,6 @@ class App {
       case 'exportJira': return this.download(`${safeName(project.name)} for Jira.csv`, exportJiraCSV(project, this.computed), 'text/csv', 'Jira CSV');
       case 'exportInversionModel': return this.download(`${safeName(project.name)}.inversion.json`, exportInversionModel(project, this.computed), 'application/json', 'Inversion model');
       case 'exportInversion': return this.download(`${safeName(project.name)} for Inversion.csv`, exportInversionCSV(project, this.computed), 'text/csv', 'Inversion CSV');
-      case 'sample': {
-        if (store.dirty && project.tasks.length && !(await ask('Open the sample project?', 'Your current project is autosaved in this browser, but not saved to a file.', [{ label: 'Cancel', value: false }, { label: 'Open sample', value: true, primary: true }]))) return;
-        store.load(structuredClone(SAMPLE));
-        return this.toast('Sample: a fictional contractor building tools, private AI and two agents');
-      }
       case 'critical': this.gantt.critical = !this.gantt.critical; return this.render();
       case 'saveBaseline':
         store.update('Save baseline', pr => pr.tasks.forEach(t => {

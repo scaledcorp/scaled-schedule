@@ -3,7 +3,7 @@ import { schedule } from '../app/js/scheduler.js';
 import { createTask, indent, newProject, parseDuration, parsePreds, parseDay, insertTask, deleteTasks,
   outdent, moveBlock, linkTasks } from '../app/js/model.js';
 import { hydrate } from '../app/js/store.js';
-import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
+import { SAMPLE, SAMPLE_EXPECTED } from './sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
 import { importP6XML, importXER } from '../app/js/io/p6.js';
