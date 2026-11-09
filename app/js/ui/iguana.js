@@ -250,10 +250,12 @@ const CUES = {
 
 function suggest(s, project, computed) {
   const low = s.toLowerCase(), words = low.match(/[a-z0-9]+/g) || [];
-  const tasks = project.tasks.filter(t => {
-    const n = t.name.toLowerCase();
-    return n && (low.includes(n) || n.split(/\s+/).some(w => w.length > 3 && words.includes(w)));
-  }).slice(0, 2);
+  // The task named after "after/before" comes first, then whole names in the text, then word matches.
+  const anchor = s.match(/\b(?:after|before|following)\s+(?:the\s+)?(.+?)\??$/i)?.[1];
+  const anchored = anchor ? findTask(project, anchor) : null;
+  const overlap = t => t.name.toLowerCase().split(/\s+/).filter(w => w.length > 3 && words.includes(w)).length;
+  const tasks = [...new Set([anchored, ...project.tasks.filter(t => t.name && low.includes(t.name.toLowerCase())),
+    ...project.tasks.filter(t => overlap(t)).sort((a, b) => overlap(b) - overlap(a))].filter(Boolean))].slice(0, 2);
   const durRe = new RegExp(`${NUM}[ -]?(?:more |extra |additional )?${UNIT}\\b`, 'i');
   const dm = s.match(durRe);
   const dur = dm ? `${dm[1]} ${/^w/i.test(dm[2]) ? 'weeks' : /^h/i.test(dm[2]) ? 'hours' : /^mo/i.test(dm[2]) ? 'months' : 'days'}` : null;
@@ -265,7 +267,7 @@ function suggest(s, project, computed) {
     const n = tasks[0].name;
     const m = s.replace(durRe, ' ').replace(/\s+/g, ' ').match(/^(?:\w+ )?(?:(?:a|an|the|another|some) )?(.+?) (?:step |task )?(?:after|before|following)\b/i);
     const named = m && clean(m[1]);
-    const addName = named && named.split(' ').length <= 5 && !findTask(project, named) ? cap(named) : 'New task';
+    const addName = named && named.split(' ').length <= 5 && !project.tasks.some(t => t.name.toLowerCase() === named.toLowerCase()) ? cap(named) : 'New task';
     if (date) cand.push([`move ${n} to ${date}`, cue('move') + 1]);
     if (dur) cand.push([`make ${n} ${dur}`, cue('duration') + 1]);
     if (dur || CUES.add.test(s)) cand.push([`add ${addName} ${dur || '1 day'} after ${n}`, cue('add') + (dur ? 1 : 0) + (addName !== 'New task' ? 1 : 0)]);
@@ -287,7 +289,7 @@ function planAdd(rest, project) {
   const milestone = /\bmilestone\b/i.test(r);
   const quoted = r.match(/["“]([^"”]+)["”]/);
   r = r.replace(new RegExp(`\\s(?:for |lasting |that takes |taking )?${NUM}[ -]?${UNIT}\\b`, 'i'), (x, n, u) => { d = durOf(n, u, project); return ' '; });
-  r = r.replace(/\s(?:right\s+)?after\s+(.+?)(?=\s+(?:and|give|assign(?:ed)?|for)\b|\s*$)/i, (x, y) => { after = y; return ' '; });
+  r = r.replace(/\s(?:right\s+)?after\s+(.+?)(?=\s+(?:and\s+(?:give|assign)|give|assign(?:ed)?|for)\b|\s*$)/i, (x, y) => { after = y; return ' '; });
   r = r.replace(/\s(?:and\s+)?(?:give it to|assign(?:ed)?(?: it)? to|for)\s+(.+?)\s*$/i, (x, y) => { who = clean(y); return ' '; });
   let name = quoted ? quoted[1] : r.replace(/\b(?:a|an|the|new|task|milestone|called|named|and|some|another|extra)\b/gi, ' ').replace(/^\s*(?:of|for)\s+/i, ' ');
   name = cap(clean(name.replace(/\s+/g, ' '))) || (milestone ? 'Milestone' : 'New task');
