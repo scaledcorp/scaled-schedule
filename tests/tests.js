@@ -384,6 +384,52 @@ test('Schedule Iguana: planning sense (health, buffer, know-how, tips)', () => {
   eq(coach(p, schedule(p), { edited: [T('Build').id] }).id, 'long');
 });
 
+test('Schedule Iguana: what-if, finish sooner, typos, corrections and project controls', () => {
+  const p = mini([['Design', 5], ['Build', 10], ['Paint', 5], ['Launch', 0], ['Permits', 2]]);
+  for (let i = 1; i < 4; i++) p.tasks[i].preds = [{ id: p.tasks[i - 1].id, type: 'FS', lag: 0 }];
+  const ctx = () => ({ project: p, computed: schedule(p) });
+  const run = q => { const r = interpret(q, ctx()); if (r.kind !== 'plan') throw new Error(`${q}: ${r.text}`); const c = schedule(p); r.run(p, c.calendar, c); return r; };
+  const T = n => p.tasks.find(t => t.name === n);
+  const snap = JSON.stringify(p);
+  // what if: answers without changing anything, offers the real command
+  const w = interpret('what if Build slips a week?', ctx());
+  eq([w.kind, w.text.includes('(+5 days)'), w.suggestions[0], JSON.stringify(p) === snap], ['answer', true, 'push Build out 1 week', true]);
+  eq(interpret('what if Permits takes 6 days?', ctx()).text.includes('finish holds'), true);
+  eq(interpret('if we cut Paint, when do we finish?', ctx()).text.includes('(−5 days)'), true);
+  // finish sooner: ranked options that Iguana can run
+  const s = interpret('how can we finish sooner?', ctx());
+  eq(s.list, ['Start "Paint" 3 days before "Build" finishes (overlap): finish 3 days sooner',
+    'Shorten "Build" from 10 days to 8 days (more people or overtime): finish 2 days sooner',
+    'Shorten "Design" from 5 days to 4 days (more people or overtime): finish 1 day sooner']);
+  run(s.suggestions.find(x => x.startsWith('start')));
+  eq(T('Paint').preds[0].lag < 0 || T('Build').preds[0].lag < 0, true);
+  // typos
+  eq(interpret('make Biuld 9 days', ctx()).lines[0], 'Make "Build" 9 days');
+  eq(interpret('when does Pnait finish?', ctx()).text.startsWith('"Paint" finishes'), true);
+  // undo several
+  eq(interpret('undo the last two', ctx()).count, 2);
+  eq(interpret('undo everything you did', ctx()).count, 'all');
+  // corrections rewrite the last request
+  const fake = last => Object.assign(Object.create(Iguana.prototype), { last: { text: last, i: 0 }, app: { project: p, computed: schedule(p) } });
+  eq(fake('add review 2 days after Build').fixUp('3 days').text, 'add review 3 days after Build');
+  eq(fake('add review 2 days after Build').fixUp('after Paint').text, 'add review 2 days after Paint');
+  eq(fake('move Launch to March 3').fixUp('March 10').text, 'move Launch to March 10');
+  eq(fake('add review after Build and give it to Ana').fixUp('Ben').text, 'add review after Build and give it to Ben');
+  eq(fake('move Launch to March 3').fixUp('call it Go-live').keep, true);
+  // project controls
+  eq(interpret('how far off the baseline are we?', ctx()).suggestions[0], 'save a baseline');
+  run('save a baseline');
+  eq(p.tasks.every(t => t.baseline), true);
+  run('make Build 12 days');
+  const v = interpret('how far off the baseline are we?', ctx());
+  eq([v.text.startsWith('The finish is 2 days behind the baseline'), v.list[0].startsWith('"Build" finishes 2 days late')], [true, true]);
+  T('Design').percent = 100; T('Build').percent = 50;
+  const ev = interpret("what's our SPI as of Jan 22 2027?", ctx());
+  eq([ev.text, ev.list[0]], ['Earned value as of Fri 1/22/27:', 'SPI 0.50, behind: 50% of the work planned by now is done']);
+  const st = interpret('write a status update as of Jan 22 2027', ctx());
+  eq([st.report.split('\n')[0], st.report.includes('Progress: 46% complete'), st.report.includes('In progress: Build (50%)')], ['Status as of Fri 1/22/27', true, true]);
+});
+
 const pass = results.filter(r => r[1]).length;
 document.getElementById('summary').textContent = `${pass} of ${results.length} passed`;
 document.getElementById('summary').className = pass === results.length ? 'ok' : 'bad';

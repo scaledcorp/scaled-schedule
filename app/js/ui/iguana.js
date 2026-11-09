@@ -17,7 +17,9 @@ const runs = (a, b) => (a === b ? `on ${fmtDate(a)}` : `runs ${fmtDate(a)} to ${
 const HELP = 'I can add tasks ("add a 3-day testing task after Build and give it to Ana"), link them ("link Design to Build"), ' +
   'move them ("move Launch to March 15"), change durations ("make Build 5 days"), rename, delete, assign people and mark progress ' +
   '("Build is 50% done"). Ask me "what\'s on the critical path?", "who\'s over-booked?", "when does Launch finish?" or ' +
-  '"why did Launch move?", "are we on track?" or "how should I estimate this?". I always show you the plan first, and every change can be undone.';
+  '"why did Launch move?", "are we on track?" or "how should I estimate this?". Try "what if Build slips a week?" and ' +
+  '"how can we finish sooner?". For project controls: "save a baseline", "how far off the baseline are we?", "write a status update" ' +
+  'and "what\'s our SPI?". Say "actually, 4 days" to fix my last change. I always show you the plan first, and every change can be undone.';
 
 export function findTask(project, ref) {
   let r = clean(ref).toLowerCase();
@@ -25,7 +27,30 @@ export function findTask(project, ref) {
   if (!r) return null;
   if (/^\d+$/.test(r)) return project.tasks[+r - 1] || null;
   const ts = project.tasks, n = t => t.name.toLowerCase();
-  return ts.find(t => n(t) === r) || ts.find(t => n(t).startsWith(r)) || ts.find(t => n(t).includes(r)) || null;
+  return ts.find(t => n(t) === r) || ts.find(t => n(t).startsWith(r)) || ts.find(t => n(t).includes(r)) || nearest(ts, r);
+}
+
+// Typos: "Biuld" still finds Build. Accepts one slip in short names, two in longer ones, and only when a
+// single task is the clear closest.
+function typoDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+function nearest(tasks, r) {
+  if (r.length < 4) return null;
+  const limit = r.length >= 5 ? 2 : 1, oneWord = !r.includes(' ');
+  const scored = tasks.map(t => {
+    const name = t.name.toLowerCase(), words = oneWord ? name.split(/\s+/).filter(w => w.length >= 4) : [];
+    return [t, Math.min(typoDistance(r, name), ...words.map(w => typoDistance(r, w)))];
+  }).filter(([, s]) => s <= limit).sort((a, b) => a[1] - b[1]);
+  return scored.length && (scored.length === 1 || scored[0][1] < scored[1][1]) ? scored[0][0] : null;
 }
 
 const durOf = (n, u, project) => parseDuration(`${n}${u.replace(/^wks?$/i, 'w').replace(/^hrs?$/i, 'h').replace(/^mins?$/i, 'min')}`, project);
@@ -85,6 +110,11 @@ const REWRITES = [
   [/^(?:fit|squeeze|slot|throw|put|get|tack|work) (?:in |on )?(.+)$/i, 'add $1'],
 ];
 
+// number words before units: "three days", "a couple of weeks", "half a day"
+const numberWords = s => s.replace(/\bhalf an? (hour|day|week)\b/gi, '0.5 $1')
+  .replace(/\b(a couple of|a couple|a few|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|an?)[ -](minutes?|hours?|days?|weeks?|months?)\b/gi,
+    (x, w, u) => `${WORDS[w.toLowerCase()]} ${u}`);
+
 export function normalize(input) {
   let s = ` ${input.trim().replace(/\s+/g, ' ')} `;
   const raw = s;
@@ -100,10 +130,7 @@ export function normalize(input) {
     .replace(/\s*(?:please|for me|thanks|thank you|asap|today|yesterday|this morning|last week)[.!]*\s*$/i, ' ')
     .replace(/[.!]+\s*$/, ' ');
   const plain = s.trim();
-  // number words before units: "three days", "a couple of weeks", "half a day"
-  s = s.replace(/\bhalf an? (hour|day|week)\b/gi, '0.5 $1')
-    .replace(/\b(a couple of|a couple|a few|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|an?)[ -](minutes?|hours?|days?|weeks?|months?)\b/gi,
-      (x, w, u) => `${WORDS[w.toLowerCase()]} ${u}`);
+  s = numberWords(s);
   // hedges around amounts: "about 3 days", "3ish days", "a week or so" -> take the number as given
   s = s.replace(/\b(?:roughly|about|around|approximately|approx\.?|something like|give or take|maybe|probably|like)\s+(?=\d)/gi, '')
     .replace(/~\s*(?=\d)/g, '')
@@ -292,6 +319,10 @@ function planBlock(text, { project, chain }) {
 }
 
 function single(text, ctx) {
+  const hypo = whatIf(text, ctx);
+  if (hypo) return hypo;
+  const ctl = controls(text, ctx);
+  if (ctl) return ctl;
   const blk = planBlock(text.trim(), ctx);
   if (blk) return blk;
   const n = normalize(text);
@@ -312,7 +343,14 @@ function interpretCore(text, { project, computed }) {
   let m;
   if (!s) return { kind: 'answer', text: HELP };
   if (/^(help|what can you do|how do i|\?)/.test(low)) return { kind: 'answer', text: HELP };
-  if (/^undo\b/.test(low)) return { kind: 'undo' };
+  if (/^undo\b/.test(low)) {
+    if (/\b(?:everything|all)\b/.test(low)) return { kind: 'undo', count: 'all' };
+    const n = low.match(/\b(\d+|two|three|four|five|six|seven|eight|nine|ten)\b/)?.[1];
+    return { kind: 'undo', count: n ? (/^\d+$/.test(n) ? +n : COUNT[n]) : 1 };
+  }
+  if (/\b(?:finish|be done|get done|wrap up|end|deliver)\w* (?:sooner|earlier|faster|quicker|ahead of schedule)\b|\b(?:shorten|compress|speed up|accelerate|crash|fast.?track)\b|\b(?:pull|bring) (?:in |forward )?the (?:finish|end date|deadline)\b|\bsave (?:some )?time\b/.test(low)) {
+    return compress(project, computed);
+  }
 
   // ---- questions
   if (/critical/.test(low)) {
@@ -377,6 +415,20 @@ function interpretCore(text, { project, computed }) {
     return plan('Link with a gap', [`${q(to)} starts ${formatDuration(lag, project)} after ${q(from)} finishes`], p => {
       const succ = pick(p, to), ex = succ.preds.find(x => x.id === from.id);
       if (ex) { ex.lag = lag; ex.type = 'FS'; } else succ.preds.push({ id: from.id, type: 'FS', lag });
+    });
+  }
+  if ((m = s.match(new RegExp(`^(?:start|begin) (.+?) ${NUM} ?${UNIT} before (.+?)(?: (?:finishes|is done|ends|wraps(?: up)?))?$`, 'i'))) ||
+      (m = s.match(new RegExp(`^overlap (.+?) (?:with|and) (.+?) by ${NUM} ?${UNIT}$`, 'i')))) {
+    const over = /^overlap/i.test(s);
+    const [a, b, n, u] = over ? [m[1], m[2], m[3], m[4]] : [m[1], m[4], m[2], m[3]];
+    const t = findTask(project, a), pred = findTask(project, b);
+    if (!t) return notFound(a);
+    if (!pred) return notFound(b);
+    const [succ, from] = over && t.preds.every(x => x.id !== pred.id) && pred.preds.some(x => x.id === t.id) ? [pred, t] : [t, pred];
+    const lag = -durOf(n, u, project);
+    return plan('Overlap tasks', [`Start ${q(succ)} ${formatDuration(-lag, project)} before ${q(from)} finishes`, 'Overlapping saves time but can mean rework if the earlier task changes'], p => {
+      const x = pick(p, succ), ex = x.preds.find(l => l.id === from.id);
+      if (ex) { ex.type = 'FS'; ex.lag = lag; } else x.preds.push({ id: from.id, type: 'FS', lag });
     });
   }
   if ((m = s.match(/^finish (.+?) by (.+)$/i))) {
@@ -635,6 +687,201 @@ function planBuffer(amount, unit, beforeRef, project, computed) {
   }, { adds: true });
 }
 
+// ---------------------------------------------------------------- trying things without changing them
+// Run a plan on a copy and report what would move.
+function simulate(r, project, computed) {
+  const copy = structuredClone(project);
+  r.run(copy, computed.calendar, computed);
+  const after = schedule(copy), before = new Map(project.tasks.map(t => [t.id, JSON.stringify(t)]));
+  const shifted = copy.tasks.filter(t => { const a = after.byId.get(t.id), b = computed.byId.get(t.id); return a && b && !a.summary && a.ef !== b.ef; });
+  const edited = copy.tasks.filter(t => before.has(t.id) && before.get(t.id) !== JSON.stringify(t));
+  return { after, shifted, edited, gain: computed.calendar.workBetween(after.finish, computed.finish) };
+}
+const signed = (m, project) => `${m > 0 ? '+' : '−'}${formatDuration(Math.abs(m), project)}`;
+
+// "What if Build slips a week?", "what happens if we cut the review?", "if Paint takes 6 days, when do we finish?"
+const WHATIF = /^\s*(?:so\s+)?(?:what if|what happens if|what would happen if|suppose|supposing|let'?s say|hypothetically,?)\s+(.+?)\s*\??\s*$|^\s*if\s+(.+?),\s*(?:what|when|how|does|do|will|would|where)\b.*$/i;
+function whatIf(text, ctx) {
+  const m = text.match(WHATIF);
+  if (!m) return null;
+  const said = (m[1] || m[2]).replace(/[?.!]+$/, '').trim();
+  const c = numberWords(said).replace(/^(?:we|i)\s+/i, '');
+  const amt = `(${NUM} ?${UNIT})`;
+  const map = [
+    [new RegExp(`^(.+?) (?:slips|slides|runs late|is late|is delayed|gets delayed|runs over|goes long|runs long|takes longer|is pushed|gets pushed)(?: by| out)? ${amt}$`, 'i'), 'push $1 out $2'],
+    [/^(.+?) (?:slips|slides|runs late|is late|is delayed|gets delayed|runs over|goes long|runs long|takes longer)$/i, 'push $1 out 1 week'],
+    [new RegExp(`^(.+?) (?:finishes|is done|wraps up|comes in|ends) ${amt} (?:early|sooner)$`, 'i'), 'pull $1 in $2'],
+    [new RegExp(`^(.+?) (?:takes|needs|lasts|only takes|is) ${amt}(?: instead)?$`, 'i'), 'make $1 $2'],
+    [/^(?:cut|drop|skip|remove|delete|scrap|lose) (.+)$/i, 'delete $1'],
+    [/^(?:add|insert|need) (.+)$/i, 'add $1'],
+    [/^(?:start|move) (.+?) (?:on|to) (.+)$/i, 'move $1 to $2'],
+    [/^(.+?) (?:starts|can't start until|can't start before) (.+)$/i, 'move $1 to $2'],
+  ];
+  let cmd = c;
+  for (const [re, to] of map) if (re.test(c)) { cmd = c.replace(re, to); break; }
+  const r = single(cmd, ctx);
+  if (r.kind !== 'plan') {
+    return { kind: 'answer', unknown: true, suggestions: r.suggestions || [],
+      text: `I couldn't picture "${said}" as a change. Try "what if Build slips a week?" or "what if Paint takes 6 days?"` };
+  }
+  const { project, computed } = ctx, sim = simulate(r, project, computed);
+  const others = sim.shifted.filter(t => !sim.edited.some(e => e.id === t.id)).length;
+  const moved = sim.after.finish - computed.finish;
+  let msg;
+  if (moved) {
+    msg = `If ${said}, the project would finish ${fmtDate(sim.after.finish)} (${signed(computed.calendar.workBetween(computed.finish, sim.after.finish), project)})` +
+      `${others ? `, and ${others} other task${others > 1 ? 's' : ''} would shift` : ''}.`;
+  } else {
+    const t = sim.edited.find(x => computed.byId.get(x.id) && !computed.byId.get(x.id).summary);
+    const slack = t ? computed.byId.get(t.id).float : 0;
+    msg = `If ${said}, the finish holds at ${fmtDate(computed.finish)}` +
+      `${t && slack > 0 ? `: ${q(t)} has ${formatDuration(slack, project)} of slack to absorb it` : ''}.`;
+  }
+  return { kind: 'answer', text: `${msg} Nothing has changed. Tap below to make it real.`, suggestions: [cmd] };
+}
+
+// "How can we finish sooner?" Tries the usual ways to shorten a schedule on copies and ranks them by days
+// saved: shortening a critical task (more hands, overtime) and overlapping two critical tasks.
+function compress(project, computed) {
+  const k = t => computed.byId.get(t.id), mpd = project.minutesPerDay, ctx = { project, computed };
+  const crit = project.tasks.filter(t => k(t) && !k(t).summary && k(t).critical && !t.milestone && (t.percent || 0) < 100);
+  const options = [];
+  const tryCmd = (cmd, line) => {
+    const r = interpretCore(cmd, ctx);
+    if (r.kind !== 'plan') return;
+    const { gain } = simulate(r, project, computed);
+    if (gain > 0) options.push({ cmd, line: `${line}: finish ${formatDuration(gain, project)} sooner`, gain });
+  };
+  [...crit].sort((a, b) => b.duration - a.duration).slice(0, 6).forEach(t => {
+    const days = Math.floor((t.duration * 0.8) / mpd);
+    if (days >= 1 && days * mpd < t.duration) {
+      tryCmd(`make ${t.name} ${days} day${days > 1 ? 's' : ''}`, `Shorten ${q(t)} from ${formatDuration(t.duration, project)} to ${formatDuration(days * mpd, project)} (more people or overtime)`);
+    }
+  });
+  crit.forEach(t => t.preds.forEach(l => {
+    const pred = project.tasks.find(x => x.id === l.id);
+    if (!pred || l.type !== 'FS' || l.lag < 0 || !k(pred)?.critical || pred.milestone) return;
+    const days = Math.max(1, Math.round((pred.duration * 0.25) / mpd));
+    if (days * mpd >= pred.duration) return;
+    tryCmd(`start ${t.name} ${days} day${days > 1 ? 's' : ''} before ${pred.name} finishes`, `Start ${q(t)} ${formatDuration(days * mpd, project)} before ${q(pred)} finishes (overlap)`);
+  }));
+  options.sort((a, b) => b.gain - a.gain);
+  if (!options.length) {
+    return { kind: 'answer', text: `It finishes ${fmtDate(computed.finish)}. Nothing on the critical path can be shortened or overlapped enough to matter. To pull it in, you'd need to change the scope or the order of the work.` };
+  }
+  const top = options.slice(0, 3);
+  return { kind: 'answer', text: `It finishes ${fmtDate(computed.finish)}. These would bring it in the most. Overlaps risk rework, and shortening only works with real extra hands:`,
+    list: top.map(o => o.line), suggestions: top.map(o => o.cmd) };
+}
+
+// ---------------------------------------------------------------- project controls
+// Baselines, variance, a status write-up and earned value. "as of <date>" sets the status date.
+function controls(text, { project, computed }) {
+  const low = text.trim().toLowerCase();
+  let asOf = todayMinutes();
+  const am = text.match(/\b(?:as of|at|on)\s+(.+?)\s*\??\s*$/i);
+  if (am) { const d = readDay(am[1], yearOf(computed.start)); if (d != null) asOf = endOfDay(d, computed.calendar); }
+  if (/^(?:please\s+)?(?:save|set|take|capture|lock in|freeze|snapshot|make)\s+(?:a |the |our |new |current )*baseline\b|^baseline (?:it|this|the (?:plan|schedule|project))\b/.test(low)) {
+    return planBaseline(project, computed);
+  }
+  if (/\b(?:earned value|evm|spi|cpi|schedule performance|cost performance|over budget|under budget|on budget|over the budget|burn rate|eac|estimate at completion)\b/.test(low)) {
+    return earnedValue(project, computed, asOf);
+  }
+  if (/\b(?:status (?:update|report)|weekly (?:update|report|status)|progress (?:report|update)|(?:write|draft|give me|make)(?: up)? (?:a |the |an |this week'?s |our )?(?:status|update|report)|summar(?:y|ize|ise)(?: of)? (?:the )?(?:project|progress|schedule|status))\b/.test(low)) {
+    return statusReport(project, computed, asOf);
+  }
+  if (/\b(?:baseline|variance|vs\.? (?:the )?plan|versus (?:the )?plan|against (?:the )?(?:plan|baseline)|drift\w*|(?:ahead|behind) (?:of )?(?:the )?(?:plan|baseline)|off (?:the )?(?:plan|baseline))\b/.test(low)) {
+    return variance(project, computed);
+  }
+  return null;
+}
+
+function planBaseline(project, computed) {
+  const had = project.tasks.some(t => t.baseline);
+  return plan('Save baseline', [`Save today's plan as the baseline for ${project.tasks.length} tasks (finish ${fmtDate(computed.finish)})`,
+    had && 'Replaces the baseline saved earlier', 'Gray bars show it as dates move'], (p, cal, comp) => {
+    p.tasks.forEach(t => {
+      const k = comp.byId.get(t.id);
+      if (k) t.baseline = { start: k.es, finish: k.ef, duration: k.duration, work: k.work, cost: k.cost };
+    });
+  });
+}
+
+const noBaseline = { kind: 'answer', text: 'There\'s no baseline yet. Say "save a baseline" to take one, and I can tell you what drifts from it.', suggestions: ['save a baseline'] };
+
+function variance(project, computed) {
+  const k = t => computed.byId.get(t.id), cal = computed.calendar;
+  const leaves = project.tasks.filter(t => k(t) && !k(t).summary), based = leaves.filter(t => t.baseline);
+  if (!based.length) return noBaseline;
+  const baseFinish = Math.max(...based.map(t => t.baseline.finish)), fv = cal.workBetween(baseFinish, computed.finish);
+  const text = fv > 0 ? `The finish is ${formatDuration(fv, project)} behind the baseline: ${fmtDate(computed.finish)} instead of ${fmtDate(baseFinish)}.`
+    : fv < 0 ? `The finish is ${formatDuration(-fv, project)} ahead of the baseline: ${fmtDate(computed.finish)} instead of ${fmtDate(baseFinish)}.`
+      : `The finish matches the baseline: ${fmtDate(computed.finish)}.`;
+  const list = based.map(t => [t, cal.workBetween(t.baseline.finish, k(t).ef)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([t, v]) => `${q(t)} finishes ${formatDuration(v, project)} late (${fmtDate(k(t).ef)} vs ${fmtDate(t.baseline.finish)})`);
+  const added = leaves.length - based.length;
+  if (added) list.push(`${added} task${added > 1 ? 's were' : ' was'} added after the baseline`);
+  const bc = based.reduce((s, t) => s + (t.baseline.cost || 0), 0), cc = leaves.reduce((s, t) => s + k(t).cost, 0);
+  if (bc > 0 && Math.abs(cc - bc) >= 1) list.push(`Cost is ${fmtMoney(Math.abs(cc - bc), project.currency)} ${cc > bc ? 'over' : 'under'} the baseline (${fmtMoney(cc, project.currency)} vs ${fmtMoney(bc, project.currency)})`);
+  return { kind: 'answer', text: list.length ? `${text} What changed:` : `${text} No task has slipped.`, list };
+}
+
+function statusReport(project, computed, asOf) {
+  const k = t => computed.byId.get(t.id), cal = computed.calendar, DAYM = 1440;
+  const leaves = project.tasks.filter(t => k(t) && !k(t).summary);
+  const name = t => t.name || 'Untitled';
+  const list = (ts, f) => (ts.length ? ts.slice(0, 5).map(f).join('; ') + (ts.length > 5 ? `; and ${ts.length - 5} more` : '') : 'none');
+  const total = leaves.reduce((s, t) => s + Math.max(t.duration, 1), 0);
+  const pct = Math.round(leaves.reduce((s, t) => s + Math.max(t.duration, 1) * (t.percent || 0), 0) / total);
+  const based = leaves.filter(t => t.baseline);
+  const bf = based.length ? Math.max(...based.map(t => t.baseline.finish)) : null, fv = bf != null ? cal.workBetween(bf, computed.finish) : 0;
+  const done = leaves.filter(t => (t.percent || 0) >= 100 && (t.actualFinish ?? k(t).ef) <= asOf && (t.actualFinish ?? k(t).ef) > asOf - 7 * DAYM);
+  const doing = leaves.filter(t => (t.percent || 0) < 100 && k(t).es <= asOf && k(t).ef > asOf);
+  const late = leaves.filter(t => (t.percent || 0) < 100 && k(t).ef <= asOf);
+  const next = leaves.filter(t => k(t).es > asOf && k(t).es <= asOf + 14 * DAYM).sort((a, b) => k(a).es - k(b).es);
+  const watch = health(project, computed).list?.[0];
+  const lines = [
+    `Status as of ${fmtDate(asOf)}`,
+    `Finish: ${fmtDate(computed.finish)}${bf == null ? '' : fv > 0 ? ` (${formatDuration(fv, project)} behind baseline)` : fv < 0 ? ` (${formatDuration(-fv, project)} ahead of baseline)` : ' (on baseline)'}`,
+    `Progress: ${pct}% complete`,
+    `Finished this week: ${list(done, name)}`,
+    `In progress: ${list(doing, t => `${name(t)} (${Math.round(t.percent || 0)}%)`)}`,
+    `Late: ${list(late, t => `${name(t)} (due ${fmtDate(k(t).ef)})`)}`,
+    `Next two weeks: ${list(next, t => `${name(t)} (starts ${fmtDate(k(t).es)})`)}`,
+    `Watch: ${watch || 'nothing stands out'}`,
+  ];
+  return { kind: 'answer', text: "Here's a status update you can paste:", report: lines.join('\n') };
+}
+
+function earnedValue(project, computed, asOf) {
+  const k = t => computed.byId.get(t.id), cal = computed.calendar;
+  const based = project.tasks.filter(t => k(t) && !k(t).summary && t.baseline);
+  if (!based.length) return noBaseline;
+  const useCost = based.reduce((s, t) => s + (t.baseline.cost || 0), 0) > 0;
+  const w = t => (useCost ? t.baseline.cost || 0 : Math.max(t.baseline.duration, 1));
+  const planned = t => (t.baseline.duration > 0 ? Math.min(1, Math.max(0, cal.workBetween(t.baseline.start, asOf) / t.baseline.duration)) : asOf >= t.baseline.finish ? 1 : 0);
+  const bac = based.reduce((s, t) => s + w(t), 0);
+  const pv = based.reduce((s, t) => s + w(t) * planned(t), 0);
+  const ev = based.reduce((s, t) => s + w(t) * (t.percent || 0) / 100, 0);
+  const money = x => fmtMoney(x, project.currency);
+  if (pv <= 0) return { kind: 'answer', text: `As of ${fmtDate(asOf)}, the baseline has no work due yet, so there's nothing to measure. Ask again once work is underway, or say "earned value as of" a later date.` };
+  const spi = ev / pv;
+  const pace = spi < 0.95 ? `behind: ${Math.round(spi * 100)}% of the work planned by now is done` : spi > 1.05 ? `ahead: ${Math.round(spi * 100)}% of the work planned by now is done` : 'on plan';
+  const list = [`SPI ${spi.toFixed(2)}, ${pace}`];
+  if (useCost) {
+    const ac = based.reduce((s, t) => s + k(t).cost * (t.percent || 0) / 100, 0);
+    if (ac > 0) {
+      const cpi = ev / ac;
+      list.push(`CPI ${cpi.toFixed(2)}, ${cpi < 0.95 ? 'over budget for the work done' : cpi > 1.05 ? 'under budget for the work done' : 'on budget'}; estimate at completion ${money(bac / cpi)} vs ${money(bac)} budget`);
+    }
+    list.push(`Planned value ${money(pv)}, earned value ${money(ev)}`);
+    list.push('No actual costs are recorded, so CPI compares the baseline with today\'s cost estimates');
+  } else {
+    list.push('There are no costs in the plan, so this is measured in planned work time. Add rates or costs to get CPI');
+  }
+  return { kind: 'answer', text: `Earned value as of ${fmtDate(asOf)}:`, list };
+}
+
 // "add a tentative review", "add an optional inspection, maybe": added with "Tentative" in the notes.
 function planAdd(rest, project) {
   let tentative = false;
@@ -690,6 +937,7 @@ function planAddSingle(rest, project) {
 }
 
 // ---------------------------------------------------------------- the chat panel
+const FIX = /^\s*(?:actually|no|nope|nah|wait|sorry|oops|scratch that|my bad|correction|i meant|make that|change that to|instead)\b[\s,!.:;-]*(?:(?:i meant|make (?:that|it)|change (?:that|it) to|it should be|should be|make it)\b\s*)?(.*?)\s*[.!]*$/i;
 const SUGGEST = ["What's on the critical path?", "Who's over-booked?", 'When does the project finish?', 'What can you do?'];
 
 export class Iguana {
@@ -717,7 +965,11 @@ export class Iguana {
       else if (act === 'close') this.close();
       else if (act === 'do') this.run(+e.target.closest('[data-act]').dataset.i);
       else if (act === 'change') { this.input.value = this.pending[+e.target.closest('[data-act]').dataset.i]?.text || ''; this.input.focus(); }
-      else if (act === 'undo') { this.app.store.undo(); this.say('Undone.'); }
+      else if (act === 'undo') this.undoMany(1);
+      else if (act === 'copy') {
+        const btn = e.target.closest('[data-act]'), src = btn.closest('.ig-msg').querySelector('.ig-report')?.textContent || '';
+        navigator.clipboard?.writeText(src).then(() => { btn.textContent = 'Copied'; }, () => { btn.textContent = 'Select the text to copy'; });
+      }
       else if (act === 'tips-off') { this.setTips(false); this.say('Tips are off. Say "turn on tips" to bring them back.'); }
     };
     this.pending = [];
@@ -755,14 +1007,24 @@ export class Iguana {
       this.say(on ? "Tips are on. I'll mention something only when a change makes it worth knowing." : 'Tips are off. Say "turn on tips" to bring them back.');
       return;
     }
+    // "actually, 4 days", "no, after Framing", "make that Ben": fix the last request instead of starting over.
+    let req = text;
+    const fm = this.last && text.match(FIX);
+    if (fm) {
+      if (!fm[1].trim()) { this.say('What should I change? Say something like "actually, 4 days" or "no, after Framing".'); return; }
+      const fix = this.fixUp(fm[1]);
+      if (!fix.keep) this.retract();
+      req = fix.text;
+    }
     const { project, computed } = this.app;
-    const meant = this.resolve(text);
+    const meant = this.resolve(req);
     const res = interpret(meant, { project, computed });
     if (meant !== text && !res.as && res.kind !== 'answer') res.as = meant.replace(/\n/g, '; ');
     if (res.as) this.say(`I read that as <b>“${esc(res.as)}”</b>.`);
-    if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
+    if (res.kind === 'undo') { this.undoMany(res.count); return; }
     if (res.kind === 'answer') {
-      const el = this.say(esc(res.text) + (res.list?.length ? `<ul>${res.list.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''));
+      const el = this.say(esc(res.text) + (res.list?.length ? `<ul>${res.list.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : '') +
+        (res.report ? `<div class="ig-report">${esc(res.report)}</div><button class="ig-link" data-act="copy">Copy</button>` : ''));
       if (res.about != null) this.focusIds = [res.about];
       if (res.suggestions?.length) el.insertAdjacentHTML('beforeend', `<div class="ig-sugg">${res.suggestions.map(x => `<button data-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
       return;
@@ -780,8 +1042,49 @@ export class Iguana {
       lines.push(`Project finish moves to ${fmtDate(after.finish)} (${m > 0 ? '+' : '−'}${formatDuration(Math.abs(m), project)})`);
     }
     const i = this.pending.push({ ...res, text }) - 1;
+    this.last = { text: meant.includes('\n') ? req : meant, i };
     this.say(`<p>Here's what I'll do:</p><ul>${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
       <div class="ig-acts"><button class="btn primary" data-act="do" data-i="${i}">Do it</button><button class="btn" data-act="change" data-i="${i}">Change</button></div>`);
+  }
+
+  // Undo one, several ("undo the last two") or everything Iguana did ("undo everything").
+  undoMany(count = 1) {
+    const n = count === 'all' ? this.applied || 0 : count;
+    let done = 0;
+    while (done < n && this.app.store.undo()) done++;
+    this.applied = Math.max(0, (this.applied || 0) - done);
+    this.say(!done ? (count === 'all' ? "I haven't changed anything yet." : 'There is nothing to undo.')
+      : done === 1 ? `Undone. Project finish ${esc(fmtDate(this.app.computed.finish))}.` : `Undid ${done} changes. Project finish ${esc(fmtDate(this.app.computed.finish))}.`);
+  }
+
+  // Take back the last request: undo it if it ran, or close its preview if it didn't.
+  retract() {
+    const p = this.pending[this.last.i];
+    if (!p) return;
+    if (p.done && this.lastRun === this.last.i && this.applied > 0) { this.app.store.undo(); this.applied--; this.lastRun = null; }
+    else if (!p.done) { p.done = true; this.log.querySelectorAll(`[data-i="${this.last.i}"]`).forEach(b => { b.disabled = true; }); }
+  }
+
+  // Rewrite the last request with the corrected piece: a duration, "after X", a date or a person.
+  fixUp(frag) {
+    const L = this.last.text, f = numberWords(frag).trim(), project = this.app.project;
+    const durRe = new RegExp(`${NUM}[ -]?${UNIT}\\b`, 'i');
+    let m;
+    if ((m = f.match(/^(?:call it|name it|called|named|rename it(?: to)?)\s+(.+)$/i))) return { text: `rename it to ${m[1]}`, keep: true };
+    if ((m = f.match(new RegExp(`^(?:it(?:'s| is| should be| takes| needs)?\\s+|takes?\\s+|needs?\\s+|for\\s+)?(${NUM}[ -]?${UNIT})(?:\\s+(?:long|instead))?$`, 'i')))) {
+      return { text: durRe.test(L) ? L.replace(durRe, m[1]) : /^add\b/i.test(L) ? `${L} ${m[1]}` : `make it ${m[1]}` };
+    }
+    if ((m = f.match(/^(?:after|following|once)\s+(.+?)(?:\s+(?:instead|is done|finishes))?$/i))) {
+      return { text: /\bafter\s+/i.test(L) ? L.replace(/\bafter\s+.+?(?=\s+(?:and|for|give|assign)\b|$)/i, `after ${m[1]}`) : `${L} after ${m[1]}` };
+    }
+    if ((m = f.match(/^(?:to|on|until|for|by)?\s*(.+?)(?:\s+instead)?$/i)) && readDay(m[1], yearOf(this.app.computed.start)) != null && /\b(?:to|on|until|till|by)\s+\S/i.test(L)) {
+      return { text: L.replace(/\b(to|on|until|till|by)\s+(?!.*\b(?:to|on|until|till|by)\s).+$/i, `$1 ${m[1]}`) };
+    }
+    if ((m = f.match(/^(?:give it to|assign it to|assign|to|for|by)?\s*([A-Z][\w'.-]*(?:\s+[A-Z][\w'.-]*)?)(?:\s+instead)?$/)) && !findTask(project, m[1])) {
+      const swapped = L.replace(/\b(give (?:it|them) to|assign(?:ed)?(?: it)? to|for|to)\s+[A-Z][\w'.-]*(?:\s+[A-Z][\w'.-]*)?\s*$/, `$1 ${m[1]}`);
+      return { text: swapped !== L ? swapped : `${L} and give it to ${m[1]}` };
+    }
+    return { text: frag };
   }
 
   run(i) {
@@ -795,6 +1098,8 @@ export class Iguana {
     let newId;
     try { store.update(p.label, pr => { newId = p.run(pr, this.app.computed.calendar, this.app.computed); }); }
     catch (e) { this.say(esc(`That didn't work: ${e.message}`)); return; }
+    this.applied = (this.applied || 0) + 1;
+    this.lastRun = i;
     // Say what changed in one line, and make the bars that changed glow for a moment.
     const c = this.app.computed, project = this.app.project, added = [], moved = [];
     project.tasks.forEach(t => {
