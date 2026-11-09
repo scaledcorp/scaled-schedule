@@ -227,7 +227,35 @@ function interpretCore(text, { project, computed }) {
       assignments.forEach(a => { if (!x.assignments.some(b => b.resourceId === a.resourceId)) x.assignments.push(a); });
     });
   }
-  return { kind: 'answer', unknown: true, text: `I didn't catch that yet. ${HELP.split('. ')[0]}.` };
+  return suggest(s, project, computed);
+}
+
+// Didn't match anything: offer the closest commands, built from the task names, durations and dates
+// in the request, so one tap gets it done.
+function suggest(s, project, computed) {
+  const low = s.toLowerCase(), words = low.match(/[a-z0-9]+/g) || [];
+  const tasks = project.tasks.filter(t => {
+    const n = t.name.toLowerCase();
+    return n && (low.includes(n) || n.split(/\s+/).some(w => w.length > 3 && words.includes(w)));
+  }).slice(0, 2);
+  const dm = s.match(new RegExp(`${NUM} ?(?:more |extra |additional )?${UNIT}\\b`, 'i'));
+  const dur = dm ? `${dm[1]} ${/^w/i.test(dm[2]) ? 'weeks' : /^h/i.test(dm[2]) ? 'hours' : /^mo/i.test(dm[2]) ? 'months' : 'days'}` : null;
+  const tail = s.match(/\b(?:to|on|until|till|by)\s+(.+?)\??$/i)?.[1];
+  const date = tail && readDay(tail, yearOf(computed.start)) != null ? clean(tail) : null;
+  const out = [];
+  if (tasks.length) {
+    const n = tasks[0].name;
+    if (date) out.push(`move ${n} to ${date}`);
+    if (dur) out.push(`make ${n} ${dur}`, `add New task ${dur} after ${n}`);
+    if (tasks[1]) out.push(`link ${n} to ${tasks[1].name}`);
+    out.push(`when does ${n} finish?`, `why did ${n} move?`, `${n} is done`);
+  } else {
+    const name = cap(clean(s.replace(new RegExp(`${NUM} ?${UNIT}`, 'i'), '').split(/\b(?:after|before|for|to|by)\b/i)[0]).slice(0, 40));
+    if (name && name.split(' ').length <= 6) out.push(`add ${name} ${dur || '1 day'}`);
+    out.push("what's on the critical path?", 'when does the project finish?', 'what can you do?');
+  }
+  return { kind: 'answer', unknown: true, suggestions: [...new Set(out)].slice(0, 4),
+    text: "I'm not sure what you meant. Is it one of these? Tap one, or type it your way." };
 }
 
 function planAdd(rest, project) {
@@ -322,7 +350,11 @@ export class Iguana {
     }
     if (res.as) this.say(`I read that as <b>“${esc(res.as)}”</b>.`);
     if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
-    if (res.kind === 'answer') { this.say(esc(res.text)); return; }
+    if (res.kind === 'answer') {
+      const el = this.say(esc(res.text));
+      if (res.suggestions?.length) el.insertAdjacentHTML('beforeend', `<div class="ig-sugg">${res.suggestions.map(x => `<button data-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
+      return;
+    }
     // Try the plan on a copy first, so the preview can say what will move.
     const copy = structuredClone(project);
     let newId;
