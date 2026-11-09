@@ -121,6 +121,12 @@ export function readDay(text, refYear, today = Math.floor(todayMinutes() / 1440)
 export function interpret(text, ctx) {
   const n = normalize(text);
   const res = interpretCore(n.text, ctx);
+  // No rule matched, but one suggestion clearly fits the wording: read it that way (the preview still
+  // asks before anything changes).
+  if (res.unknown && res.best) {
+    const again = interpretCore(res.best, ctx);
+    if (!again.unknown) return { ...again, as: res.best };
+  }
   if (n.rewrote && n.text.toLowerCase() !== text.trim().toLowerCase() && !res.unknown) res.as = n.text;
   return res;
 }
@@ -229,31 +235,50 @@ function interpretCore(text, { project, computed }) {
   return suggest(s, project, computed);
 }
 
-// Didn't match anything: offer the closest commands, built from the task names, durations and dates
-// in the request, so one tap gets it done.
+// Didn't match anything: build the likely commands from the task names, durations and dates in the
+// request, score each by the words that point to it, and offer the best ones as buttons. When one
+// clearly wins it becomes `best`, and Iguana reads the request that way.
+const CUES = {
+  move: /\b(?:go|goes|going|move|slide|push|shift|slip|bump|delay|postpone|reschedul\w*|later|earlier|sooner)\b/i,
+  duration: /\b(?:take|takes|taking|need|needs|longer|shorter|more|extra|another|lasts?)\b/i,
+  add: /\b(?:add|stick|insert|tack|squeeze|slot|include|new|step|review|inspection|meeting)\b/i,
+  link: /\b(?:before|depends?|first|then|until)\b/i,
+  finish: /\b(?:how long|until|when|finish(?:es|ed)? by|out the door|ready by|complete by|end date)\b|\bwhen\b/i,
+  why: /\b(?:why|holding|blocking|stuck|late|behind)\b/i,
+  done: /\b(?:wrapped|finished|done|complete|completed|over with|signed off)\b/i,
+};
+
 function suggest(s, project, computed) {
   const low = s.toLowerCase(), words = low.match(/[a-z0-9]+/g) || [];
   const tasks = project.tasks.filter(t => {
     const n = t.name.toLowerCase();
     return n && (low.includes(n) || n.split(/\s+/).some(w => w.length > 3 && words.includes(w)));
   }).slice(0, 2);
-  const dm = s.match(new RegExp(`${NUM} ?(?:more |extra |additional )?${UNIT}\\b`, 'i'));
+  const durRe = new RegExp(`${NUM}[ -]?(?:more |extra |additional )?${UNIT}\\b`, 'i');
+  const dm = s.match(durRe);
   const dur = dm ? `${dm[1]} ${/^w/i.test(dm[2]) ? 'weeks' : /^h/i.test(dm[2]) ? 'hours' : /^mo/i.test(dm[2]) ? 'months' : 'days'}` : null;
   const tail = s.match(/\b(?:to|on|until|till|by)\s+(.+?)\??$/i)?.[1];
   const date = tail && readDay(tail, yearOf(computed.start)) != null ? clean(tail) : null;
-  const out = [];
+  const cue = k => (CUES[k].test(s) ? 2 : 0);
+  const cand = [];
   if (tasks.length) {
     const n = tasks[0].name;
-    if (date) out.push(`move ${n} to ${date}`);
-    if (dur) out.push(`make ${n} ${dur}`, `add New task ${dur} after ${n}`);
-    if (tasks[1]) out.push(`link ${n} to ${tasks[1].name}`);
-    out.push(`when does ${n} finish?`, `why did ${n} move?`, `${n} is done`);
+    const m = s.replace(durRe, ' ').replace(/\s+/g, ' ').match(/^(?:\w+ )?(?:(?:a|an|the|another|some) )?(.+?) (?:step |task )?(?:after|before|following)\b/i);
+    const named = m && clean(m[1]);
+    const addName = named && named.split(' ').length <= 5 && !findTask(project, named) ? cap(named) : 'New task';
+    if (date) cand.push([`move ${n} to ${date}`, cue('move') + 1]);
+    if (dur) cand.push([`make ${n} ${dur}`, cue('duration') + 1]);
+    if (dur || CUES.add.test(s)) cand.push([`add ${addName} ${dur || '1 day'} after ${n}`, cue('add') + (dur ? 1 : 0) + (addName !== 'New task' ? 1 : 0)]);
+    if (tasks[1]) cand.push([`link ${n} to ${tasks[1].name}`, cue('link') + 1]);
+    cand.push([`when does ${n} finish?`, cue('finish')], [`why did ${n} move?`, cue('why')], [`${n} is done`, cue('done') && !CUES.finish.test(s) ? 3 : 0]);
   } else {
-    const name = cap(clean(s.replace(new RegExp(`${NUM} ?${UNIT}`, 'i'), '').split(/\b(?:after|before|for|to|by)\b/i)[0]).slice(0, 40));
-    if (name && name.split(' ').length <= 6) out.push(`add ${name} ${dur || '1 day'}`);
-    out.push("what's on the critical path?", 'when does the project finish?', 'what can you do?');
+    const name = cap(clean(s.replace(durRe, '').split(/\b(?:after|before|for|to|by)\b/i)[0]).slice(0, 40));
+    if (name && name.split(' ').length <= 6) cand.push([`add ${name} ${dur || '1 day'}`, cue('add') + (dur ? 1 : 0)]);
+    cand.push(["what's on the critical path?", 0], ['when does the project finish?', cue('finish')], ['what can you do?', 0]);
   }
-  return { kind: 'answer', unknown: true, suggestions: [...new Set(out)].slice(0, 4),
+  cand.sort((a, b) => b[1] - a[1]);
+  const best = cand[0] && cand[0][1] >= 2 && (!cand[1] || cand[0][1] > cand[1][1]) ? cand[0][0] : null;
+  return { kind: 'answer', unknown: true, best, suggestions: [...new Set(cand.map(c => c[0]))].slice(0, 4),
     text: "I'm not sure what you meant. Is it one of these? Tap one, or type it your way." };
 }
 

@@ -260,6 +260,19 @@ test('Inversion model JSON: phases as clusters, goals, tasks and requires links'
   eq([type(build.typeId), build.properties['task.start'], build.properties['task.end']], ['Task', '2027-01-19', '2027-01-28']);
 });
 
+test('Schedule Iguana picks the closest command for loose wording', () => {
+  const p = mini([['Design', 2], ['Build', 3], ['Testing', 2], ['Launch', 1]]);
+  for (let i = 1; i < 4; i++) p.tasks[i].preds = [{ id: p.tasks[i - 1].id, type: 'FS', lag: 0 }];
+  const ctx = { project: p, computed: schedule(p) };
+  const read = q => { const r = interpret(q, ctx); return r.as || (r.lines && r.lines[0]) || r.text; };
+  eq(read('Launch should probably go to March 3 2027'), 'move Launch to March 3 2027');
+  eq(read('Build feels like it needs 2 more weeks'), 'make Build 2 weeks');
+  eq(read('how long until launch is out the door'), 'when does Launch finish?');
+  eq(read('stick a 3 day review after testing'), 'add Review 3 days after Testing');
+  eq(read('design is wrapped, finally'), 'Design is done');
+  eq(interpret('blue sky thinking', ctx).unknown, true);
+});
+
 const pass = results.filter(r => r[1]).length;
 document.getElementById('summary').textContent = `${pass} of ${results.length} passed`;
 document.getElementById('summary').className = pass === results.length ? 'ok' : 'bad';
