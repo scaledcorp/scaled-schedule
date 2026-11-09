@@ -335,24 +335,26 @@ export class Iguana {
     if (mode === 'user') this.say(esc(text), 'user');
     const { project, computed } = this.app;
     let res = interpret(text, { project, computed });
-    if (res.unknown) {
-      // The rules didn't recognize the wording: let the small model rewrite it into a known phrasing.
-      if (!this.brain.ready && !(await this.brain.known())) { this.offerBrain(text); return; }
-      const think = this.say('<span class="ig-dots"><i></i><i></i><i></i></span>');
-      try {
-        if (!this.brain.ready) await this.brain.load(p => { think.innerHTML = `Waking up… ${Math.round(p.progress * 100)}%`; });
-        const { command } = await this.brain.rewrite(text, this.app.project);
-        think.remove();
-        const again = interpret(command, { project: this.app.project, computed: this.app.computed });
-        if (command.toLowerCase() === 'help' || again.unknown) { this.say(esc(res.text)); return; }
-        res = { ...again, as: command };
-      } catch (e) { think.remove(); this.say(esc(`My AI brain hit a snag: ${e.message}`)); return; }
+    let offer = false;
+    if (res.unknown && res.suggestions?.length) {
+      // The rules didn't match, but they found likely commands: the small model picks the one meant.
+      if (this.brain.ready || await this.brain.known()) {
+        const think = this.say('<span class="ig-dots"><i></i><i></i><i></i></span>');
+        try {
+          if (!this.brain.ready) await this.brain.load(p => { think.innerHTML = `Waking up… ${Math.round(p.progress * 100)}%`; });
+          const pick = await this.brain.choose(text, res.suggestions);
+          think.remove();
+          const again = pick && interpret(pick, { project: this.app.project, computed: this.app.computed });
+          if (again && !again.unknown) res = { ...again, as: pick };
+        } catch { think.remove(); }
+      } else offer = !this.brainDeclined;
     }
     if (res.as) this.say(`I read that as <b>“${esc(res.as)}”</b>.`);
     if (res.kind === 'undo') { this.say(this.app.store.undo() ? 'Undone.' : 'There is nothing to undo.'); return; }
     if (res.kind === 'answer') {
       const el = this.say(esc(res.text));
       if (res.suggestions?.length) el.insertAdjacentHTML('beforeend', `<div class="ig-sugg">${res.suggestions.map(x => `<button data-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
+      if (offer) this.offerBrain(text);
       return;
     }
     // Try the plan on a copy first, so the preview can say what will move.
@@ -369,10 +371,11 @@ export class Iguana {
 
   // First time only: ask before downloading the model, then show progress and retry the request.
   offerBrain(text) {
-    const el = this.say(`<p>I don't know that wording yet. My AI brain can figure it out: a small Llama model that runs right here on
-      this computer, nothing sent anywhere. It's a one-time download of about 1.2 GB. Built with Llama.</p>
-      <div class="ig-acts"><button class="btn primary" data-brain="yes">Download my brain</button><button class="btn" data-brain="no">Not now</button></div>`);
-    el.querySelector('[data-brain="no"]').onclick = () => { el.querySelectorAll('button').forEach(b => { b.disabled = true; }); this.say('No problem. Try the phrasings in "What can you do?".'); };
+    const el = this.say(`<p>Want me to pick the right one myself next time? My helper brain is a tiny Gemma model that runs right
+      here on this computer, nothing sent anywhere. It's a one-time download of about 0.3 GB.</p>
+      <div class="ig-acts"><button class="btn primary" data-brain="yes">Download my brain</button><button class="btn" data-brain="no">Not now</button></div>
+      <small class="hint">Gemma is provided under and subject to the Gemma Terms of Use (ai.google.dev/gemma/terms).</small>`);
+    el.querySelector('[data-brain="no"]').onclick = () => { el.querySelectorAll('button').forEach(b => { b.disabled = true; }); this.brainDeclined = true; this.say('No problem. The buttons above still work.'); };
     el.querySelector('[data-brain="yes"]').onclick = async () => {
       el.querySelectorAll('button').forEach(b => { b.disabled = true; });
       const bar = this.say('<div class="ig-bar"><i style="width:0%"></i></div><small>Starting download…</small>');

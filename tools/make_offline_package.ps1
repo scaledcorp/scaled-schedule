@@ -1,12 +1,12 @@
-# Builds the offline package: the app plus Schedule Iguana's AI model (Llama 3.2 1B Instruct, q8,
-# Llama 3.2 Community License) in one ZIP that runs with no internet. Output: dist\scaled-schedule-offline.zip
+# Builds the offline package: the app plus Schedule Iguana's AI model (Gemma 3 270M, 4-bit,
+# Gemma Terms of Use) in one ZIP that runs with no internet. Output: dist\scaled-schedule-offline.zip
 # Run from the repo root:  powershell -ExecutionPolicy Bypass -File tools\make_offline_package.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $stage = Join-Path $root 'dist\scaled-schedule'
 $zip = Join-Path $root 'dist\scaled-schedule-offline.zip'
-$model = 'onnx-community/Llama-3.2-1B-Instruct'
-$files = 'config.json', 'generation_config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx'
+$model = 'onnx-community/gemma-3-270m-it-ONNX'
+$files = 'config.json', 'generation_config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_q4.onnx', 'onnx/model_q4.onnx_data'
 
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force $stage | Out-Null
@@ -32,11 +32,10 @@ foreach ($f in $files) {
 }
 Copy-Item (Join-Path $cache 'onnx-community') (Join-Path $stage 'app\models\onnx-community') -Recurse
 Set-Content (Join-Path $stage 'app\models\MODEL-LICENSE.txt') -Value @(
-  'Built with Llama. Schedule Iguana uses Llama 3.2 1B Instruct by Meta, licensed under the Llama 3.2',
-  'Community License (https://www.llama.com/llama3_2/license/) and its Acceptable Use Policy',
-  '(https://www.llama.com/llama3_2/use-policy/). Llama 3.2 is licensed under the Llama 3.2 Community License,',
-  'Copyright (c) Meta Platforms, Inc. All Rights Reserved.',
-  'Model files from https://huggingface.co/onnx-community/Llama-3.2-1B-Instruct (ONNX conversion).'
+  'Schedule Iguana uses Gemma 3 270M (instruction-tuned) by Google.',
+  'Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms,',
+  'including the Gemma Prohibited Use Policy (ai.google.dev/gemma/prohibited_use_policy).',
+  'Model files from https://huggingface.co/onnx-community/gemma-3-270m-it-ONNX (ONNX conversion).'
 )
 
 if (Test-Path $zip) { Remove-Item $zip -Force }

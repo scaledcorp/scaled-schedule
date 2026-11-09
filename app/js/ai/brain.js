@@ -1,36 +1,8 @@
-// Schedule Iguana's AI layer. The small model never edits the schedule: it only rewrites a request into
-// one of the phrasings Iguana's rules already understand, and the rules do the rest (preview, undo).
-const FLAG = 'scaled-schedule:iguana-ai';
-
-const SYSTEM = `You rewrite a request about a project schedule into exactly one command from this list:
-add <name> <N> days after <task> and give it to <person>
-add <name> milestone after <task>
-link <task> to <task>
-move <task> to <date>
-make <task> <N> days
-rename <task> to <new name>
-delete <task>
-give <task> to <person>
-<task> is <N>% done
-what's on the critical path?
-who's over-booked?
-when does <task> finish?
-when does the project finish?
-why did <task> move?
-how much does it cost?
-Leave out parts the request doesn't mention. Use task names exactly as listed. If nothing fits, reply: help
-Reply with the command only.`;
-
-const EXAMPLES = [
-  ['can we squeeze in a QA pass for three days once Build wraps up? Ana can own it', 'add QA pass 3 days after Build and give it to Ana'],
-  ['push the launch out to march 3rd', 'move Launch to March 3'],
-  ["build is gonna take a week", 'make Build 5 days'],
-  ['Ana wrapped up the design work', 'Design is 100% done'],
-  ["what's going to make us late?", "what's on the critical path?"],
-  ['design has to be finished before build can start', 'link Design to Build'],
-  ['we need a sign-off milestone after launch', 'add Sign-off milestone after Launch'],
-  ['are we over budget, what does this cost', 'how much does it cost?'],
-];
+// Schedule Iguana's AI helper. It never edits the schedule: when Iguana's rules can't match a request,
+// they still list likely commands, and the small model only picks which one the person meant.
+// Iguana then shows its normal preview, so every change can be checked and undone.
+const FLAG = 'scaled-schedule:iguana-gemma';
+const MODEL_DIR = '../../models/onnx-community/gemma-3-270m-it-ONNX/';
 
 export class Brain {
   constructor() { this.worker = null; this.seq = 0; this.waiting = new Map(); this.ready = false; }
@@ -38,7 +10,7 @@ export class Brain {
   // Was the model downloaded before (or is it in the offline package)? Then no need to ask first.
   async known() {
     try { if (localStorage.getItem(FLAG) === 'on') return true; } catch { /* storage blocked */ }
-    try { return (await fetch(new URL('../../models/onnx-community/Llama-3.2-1B-Instruct/config.json', import.meta.url), { method: 'HEAD' })).ok; }
+    try { return (await fetch(new URL(`${MODEL_DIR}config.json`, import.meta.url), { method: 'HEAD' })).ok; }
     catch { return false; }
   }
 
@@ -63,22 +35,22 @@ export class Brain {
   async load(onProgress) {
     const r = await this.call('load', {}, onProgress);
     this.ready = true;
-    this.device = r.device;
     try { localStorage.setItem(FLAG, 'on'); } catch { /* per-viewer convenience only */ }
     return r;
   }
 
-  // Returns { command, ms }.
-  async rewrite(text, project) {
-    // Only the task names that share a word with the request: a short prompt is faster and keeps a
-    // small model focused.
-    const words = new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) || []);
-    const hits = project.tasks.map(t => t.name).filter(n => (n.toLowerCase().match(/[a-z0-9]{3,}/g) || []).some(w => words.has(w)));
-    const names = (hits.length ? hits : project.tasks.map(t => t.name)).slice(0, 8).join('; ');
-    const messages = [{ role: 'system', content: `${SYSTEM}\n\nTask names: ${names || '(none yet)'}` }];
-    EXAMPLES.slice(0, 3).forEach(([u, a]) => messages.push({ role: 'user', content: u }, { role: 'assistant', content: a }));
-    messages.push({ role: 'user', content: text });
-    const r = await this.call('ask', { messages, maxTokens: 24 });
-    return { command: r.text.split('\n')[0].replace(/^["'`]+|["'`]+$/g, '').trim(), ms: r.ms };
+  // Returns the chosen option's text, or null when none fits.
+  async choose(text, options) {
+    const list = options.map((o, i) => `${i + 1}. ${o}`).join('\n');
+    const messages = [
+      { role: 'system', content: 'You match a request about a project schedule to the option that means the same thing. Reply with the option number only. Reply 0 if no option fits.' },
+      { role: 'user', content: 'Request: push the kickoff back to friday\nOptions:\n1. when does Kickoff finish?\n2. move Kickoff to friday\n3. Kickoff is done' },
+      { role: 'assistant', content: '2' },
+      { role: 'user', content: `Request: ${text}\nOptions:\n${list}` },
+    ];
+    const r = await this.call('ask', { messages, maxTokens: 3 });
+    const n = parseInt((r.text.match(/\d+/) || ['0'])[0], 10);
+    this.lastMs = r.ms;
+    return n >= 1 && n <= options.length ? options[n - 1] : null;
   }
 }

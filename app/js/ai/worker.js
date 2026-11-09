@@ -1,9 +1,9 @@
 // Runs Schedule Iguana's small language model in the background so the app stays smooth.
-// Model: Llama 3.2 1B Instruct by Meta (Llama 3.2 Community License), compressed. It loads from the offline package's
+// Model: Gemma 3 270M instruction-tuned by Google (Gemma Terms of Use), 4-bit, about 0.3 GB. It loads from the offline package's
 // models/ folder when present, otherwise downloads once from Hugging Face and is cached by the browser.
 import { env, pipeline } from '../../vendor/transformers/transformers.min.js';
 
-const MODEL = 'onnx-community/Llama-3.2-1B-Instruct';
+const MODEL = 'onnx-community/gemma-3-270m-it-ONNX';
 env.backends.onnx.wasm.wasmPaths = new URL('../../vendor/transformers/', import.meta.url).href;
 env.localModelPath = new URL('../../models/', import.meta.url).href;
 env.allowLocalModels = true;
@@ -16,9 +16,8 @@ let generator = null;
 
 async function load(id) {
   if (generator) return post(id, { ready: true, device: generator.device });
-  // The offline package ships the q8 file, which runs on any processor; online, use the graphics chip
-  // (q4f16) when the browser offers it.
-  const packaged = await fetch(`${env.localModelPath}${MODEL}/onnx/model_quantized.onnx`, { method: 'HEAD' }).then(r => r.ok, () => false);
+  // The offline package ships the 4-bit file, which runs on any processor.
+  const packaged = await fetch(`${env.localModelPath}${MODEL}/onnx/model_q4.onnx`, { method: 'HEAD' }).then(r => r.ok, () => false);
   // Graphics-chip mode stays off for now: on a Ryzen laptop's Radeon graphics the q4f16 model answered
   // with garbage after 56 s (Nov 2026). The processor (q8) is the reliable path.
   const GPU_MODE = false;
@@ -26,7 +25,7 @@ async function load(id) {
   const device = gpu ? 'webgpu' : 'wasm';
   const files = new Map();
   generator = await pipeline('text-generation', MODEL, {
-    device, dtype: gpu ? 'q4f16' : 'q8',
+    device, dtype: gpu ? 'q4f16' : 'q4',
     progress_callback: p => {
       if (p.status !== 'progress' || !p.total) return;
       files.set(p.file, [p.loaded, p.total]);
@@ -47,7 +46,7 @@ async function ask(id, messages, maxTokens = 48) {
   // ("assistant"); keep only what the model actually answered.
   const g = out[0]?.generated_text;
   let text = Array.isArray(g) ? String(g.at(-1)?.content ?? '') : String(g ?? '');
-  text = text.split(/<\|end_header_id\|>|\bassistant\b\s*\n+/i).pop().replace(/<\|eot_id\|>[\s\S]*$/, '');
+  text = text.split(/<\|end_header_id\|>|\bassistant\b\s*\n+/i).pop().replace(/<\|eot_id\|>[\s\S]*$|<end_of_turn>[\s\S]*$/, '');
   post(id, { text: text.trim(), ms: Math.round(performance.now() - t0) });
 }
 
