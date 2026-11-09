@@ -15,6 +15,11 @@ import { exportInversionModel } from './io/inversion.js';
 import { importP6XML, importXER, isP6XML } from './io/p6.js';
 import { importXLSX } from './io/xlsx.js';
 import { decodeText } from './io/files.js';
+import { importDOCX, importPPTX } from './io/office.js';
+import { reviewImport } from './ui/review.js';
+
+// PDF.js is about 1.7 MB, so it loads only when someone opens a PDF.
+const importPDF = async (buf, name) => (await import('./io/pdf.js')).importPDF(buf, name);
 
 const P = {
   open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
@@ -419,7 +424,9 @@ class App {
       try {
         const [h] = await showOpenFilePicker({ types: [{ description: 'Schedules', accept: {
           'application/json': ['.sched', '.json'], 'application/xml': ['.xml'], 'text/csv': ['.csv'], 'text/plain': ['.xer'],
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'], 'application/vnd.ms-project': ['.mpp'] } }] });
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'], 'application/vnd.ms-project': ['.mpp'], 'application/pdf': ['.pdf'],
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] } }] });
         return this.openFile(await h.getFile(), h);
       } catch (e) { if (e.name === 'AbortError') return; }
     }
@@ -432,7 +439,9 @@ class App {
     if (/^(mp4|mov|webm|m4v|avi)$/.test(ext)) return this.toast('Turning a video into a schedule is coming soon. Stay tuned!');
     if (ext === 'mpp') return info('Save it from Project as XML', 'Microsoft Project keeps .mpp files in its own closed format. In Project, choose File, Save As, and pick "XML Format (*.xml)". Then open that .xml here. Every file is read on this computer and never uploaded.');
     if (ext === 'xls' || ext === 'xlsb') return info('Save it as .xlsx', 'In Excel, choose File, Save As, and pick "Excel Workbook (*.xlsx)" or CSV. Then open that file here.');
-    if (/^(pdf|pptx?|docx?|png|jpe?g|gif|bmp|tiff?|webp)$/.test(ext)) return this.toast('Turning PDFs, slides and pictures into a schedule is coming next. For now, open a P6, Microsoft Project, Excel or CSV file.');
+    if (ext === 'ppt' || ext === 'doc') return info(`Save it as .${ext}x`, `Older ${ext === 'ppt' ? 'PowerPoint' : 'Word'} files use a format the browser can't read. Open it and choose File, Save As, and pick the .${ext}x format. Then open that file here.`);
+    if (/^(png|jpe?g|gif|bmp|tiff?|webp|heic)$/.test(ext)) return this.toast('Reading schedules from pictures is coming next. For now, open a PDF, slides, Word, P6, Project, Excel or CSV file.');
+    if (/^(pdf|pptx|docx)$/.test(ext)) return this.openDocument(file, ext);
     if (this.store.dirty && this.project.tasks.length && !(await ask(`Open ${name}?`, 'Your current project is autosaved in this browser, but not saved to a file.', [{ label: 'Cancel', value: false }, { label: 'Open it', value: true, primary: true }]))) return;
     try {
       let project, warnings = [], keep = false;
@@ -453,6 +462,23 @@ class App {
       warnings.slice(0, 3).forEach(w => this.toast(w));
       this.focusGrid();
     } catch (e) { this.toast(e.message || `Couldn't open ${name}.`); }
+  }
+
+  // PDFs, slides and Word documents: read the schedule out, show it for review, then create it.
+  async openDocument(file, ext) {
+    const name = file.name;
+    try {
+      this.toast(`Reading ${name}…`);
+      const buf = await file.arrayBuffer();
+      const read = ext === 'pdf' ? await importPDF(buf, name) : ext === 'pptx' ? await importPPTX(buf, name) : await importDOCX(buf, name);
+      const picked = await reviewImport({ fileName: name, ...read });
+      if (!picked) return;
+      const before = { project: structuredClone(this.project), fileName: this.store.fileName, handle: this.store.fileHandle };
+      this.store.load(picked.project);
+      this.toast(`Created a schedule from ${name}.`, { label: 'Undo', run: () => this.store.load(before.project, { fileName: before.fileName, handle: before.handle }) });
+      picked.warnings.slice(0, 2).forEach(w => this.toast(w));
+      this.focusGrid();
+    } catch (e) { this.toast(e.message || `Couldn't read ${name}.`); }
   }
 
   async save(as) {

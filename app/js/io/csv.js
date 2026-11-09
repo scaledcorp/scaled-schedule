@@ -80,14 +80,17 @@ function readDate(text) {
 // Rows of cells with a header row (CSV, or a sheet read from Excel) -> project. Finds the header
 // within the first rows, maps columns by name, reads links by row number or by Activity ID, and
 // takes outline levels from a level column, unique WBS numbers, Excel row grouping or name indent.
-export function importTable(rows, { name = 'Imported project', outline = [], indents = [], extra = [] } = {}) {
-  const head = rows.slice(0, 20).findIndex(r => columns(r)(...NAMES) >= 0);
-  if (head < 0) throw new Error("Couldn't find a task name column. Name one Task Name, Activity Name or Name.");
-  const col = columns(rows[head]);
-  const C = {
+// The fields a table column can hold, in the order the review screen lists them.
+export const FIELDS = { name: 'Task name', id: 'Activity ID', dur: 'Duration', start: 'Start', finish: 'Finish',
+  pred: 'Predecessors', pct: '% complete', res: 'Resources', notes: 'Notes', level: 'Outline level', wbs: 'WBS' };
+
+// Header cells -> which column holds which field (-1 when there's none).
+export function columnMap(header) {
+  const col = columns(header);
+  return {
     name: col(...NAMES), level: col('outline level', 'level', 'indent level'),
     wbs: col('wbs', 'outline number', 'wbs code'), id: col('activity id', 'task id', 'id', 'task code'),
-    dur: col('duration (days)', 'duration', 'original duration', 'orig dur', 'planned duration', 'days', 'duration (d)'),
+    dur: col('duration (days)', 'duration', 'original duration', 'orig dur', 'orig duration', 'planned duration', 'days', 'duration (d)', 'rem dur', 'remaining duration'),
     start: col('start', 'start date', 'planned start', 'early start', 'begin'),
     finish: col('finish', 'finish date', 'end', 'end date', 'planned finish', 'early finish', 'due date', 'due'),
     pred: col('predecessors', 'predecessor', 'depends on', 'dependencies', 'preds'),
@@ -95,10 +98,23 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
     pct: col('% complete', 'percent complete', 'activity % complete', '% done', 'progress'),
     notes: col('notes', 'comments', 'remarks'),
   };
+}
+export const findHeader = rows => rows.slice(0, 20).findIndex(r => columns(r)(...NAMES) >= 0);
+
+// options: name, outline / indents (per source row), extra warnings, map (field -> column, from the
+// review screen), guess (fields to mark as guessed on every row, like dates read off a slide).
+// Returns the project plus what the review screen needs: the header, the column map and, per task,
+// the fields that were guessed.
+export function importTable(rows, { name = 'Imported project', outline = [], indents = [], extra = [], map = null, guess = [] } = {}) {
+  const head = Math.max(0, findHeader(rows));
+  const C = map ? { ...Object.fromEntries(Object.keys(FIELDS).map(k => [k, -1])), ...map } : columnMap(rows[head] || []);
+  if (C.name < 0) throw new Error("Couldn't find a task name column. Name one Task Name, Activity Name or Name.");
   const project = newProject({ name });
   const cal = new WorkCalendar(project.calendar);
   const warnings = [...extra], body = rows.slice(head + 1), at = i => head + 1 + i;
   const cell = (r, c) => (c >= 0 ? String(r[c] ?? '').trim() : '');
+  const guessed = body.map(() => new Set(guess));
+  const remC = columns(rows[head] || [])('remaining duration', 'rem dur', 'remaining');
 
   // outline levels
   const wbsVals = body.map(r => cell(r, C.wbs)).filter(Boolean);
@@ -115,9 +131,14 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
 
   const dates = [];
   body.forEach((r, i) => {
-    const s = readDate(cell(r, C.start)), f = readDate(cell(r, C.finish));
+    const s = readDate(cell(r, C.start)), f = readDate(cell(r, C.finish)), g = guessed[i];
+    if (s == null && cell(r, C.start)) g.add('start');
+    if (f == null && cell(r, C.finish)) g.add('finish');
+    if (!cell(r, C.name)) g.add('name');
     let d = cell(r, C.dur) ? parseDuration(cell(r, C.dur), project) : null;
+    if (d == null && cell(r, C.dur)) g.add('dur');
     if (d == null && s != null && f != null) d = f < s ? 0 : cal.workBetween(startOfDay(s, cal), Math.max(startOfDay(s, cal), endOfDay(f, cal)));
+    if (d == null && !(s != null && f != null)) g.add('dur');
     const pctText = cell(r, C.pct);
     let pct = parseFloat(pctText) || 0;
     if (!pctText.includes('%') && pct > 0 && pct < 1) pct *= 100;
@@ -126,15 +147,17 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
       percent: Math.max(0, Math.min(100, pct)), notes: cell(r, C.notes),
     });
     if (cell(r, C.id) && C.id !== C.wbs && !/^\d+$/.test(cell(r, C.id))) t.activityId = cell(r, C.id);
-    if (s != null) t.constraint = { type: 'SNET', date: startOfDay(s, cal) };
-    dates.push([s, f]);
+    // only a finish date (a finish milestone, say): start it so that it ends that day
+    const at = s != null ? startOfDay(s, cal) : f != null ? cal.subtractWork(endOfDay(f, cal), t.duration) : null;
+    if (at != null) t.constraint = { type: 'SNET', date: at };
+    dates.push([s ?? (at != null ? Math.floor(at / 1440) : null), f]);
     project.tasks.push(t);
   });
   normalizeLevels(project.tasks);
 
-  // links: by row number, or by the ID column when there is one
-  const rowOfId = new Map();
-  if (C.id >= 0) body.forEach((r, i) => { const v = cell(r, C.id); if (v && !rowOfId.has(v)) rowOfId.set(v, i + 1); });
+  // links: by row number, or by the ID column (or unique WBS codes) when there is one
+  const rowOfId = new Map(), key = C.id >= 0 ? C.id : wbsLevels ? C.wbs : -1;
+  if (key >= 0) body.forEach((r, i) => { const v = cell(r, key); if (v && !rowOfId.has(v)) rowOfId.set(v, i + 1); });
   const byId = text => text.split(/[,;]/).map(x => x.trim()).filter(Boolean).map(part => {
     const m = part.match(/^(.+?)\s*(FS|SS|FF|SF)?\s*([+-]\s*\d.*)?$/i);
     return m && rowOfId.has(m[1].trim()) ? `${rowOfId.get(m[1].trim())}${m[2] || ''}${(m[3] || '').replace(/\s+/g, '')}` : part;
@@ -143,10 +166,17 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
   body.forEach((r, i) => {
     const t = project.tasks[i], [s, f] = dates[i];
     if (cell(r, C.pred)) {
-      try { t.preds = parsePreds(byId(cell(r, C.pred)), project); } catch (e) { badLinks++; if (badLinks === 1) warnings.push(`Row ${i + 1}: ${e.message}`); }
+      try { t.preds = parsePreds(byId(cell(r, C.pred)), project); } catch (e) { guessed[i].add('pred'); badLinks++; if (badLinks === 1) warnings.push(`Row ${i + 1}: ${e.message}`); }
     }
     if (cell(r, C.res)) t.assignments = parseAssignments(cell(r, C.res), project).assignments;
-    if (t.percent > 0 && s != null) t.actualStart = startOfDay(s, cal);
+    // P6 prints an A after actual dates
+    // P6 prints an A after actual dates; with a Remaining Duration column, progress follows from it
+    const actual = c => /\sA$/.test(cell(r, c));
+    if (C.pct < 0 && actual(C.start)) {
+      const rem = remC >= 0 && remC !== C.dur ? parseDuration(cell(r, remC), project) : null;
+      t.percent = actual(C.finish) || t.milestone ? 100 : rem != null && t.duration > 0 ? Math.max(0, Math.round((1 - rem / t.duration) * 100)) : t.percent;
+    }
+    if ((t.percent > 0 || actual(C.start)) && s != null) t.actualStart = startOfDay(s, cal);
     if (t.percent >= 100 && (f != null || t.milestone)) t.actualFinish = t.milestone ? t.actualStart : Math.max(t.actualStart ?? 0, endOfDay(f, cal));
     if (t.preds.length && t.constraint.type === 'SNET') t.constraint = { type: 'ASAP', date: null };
   });
@@ -154,7 +184,7 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
   if (first != null) project.start = startOfDay(first, cal);
   if (badLinks > 1) warnings.push(`${badLinks} rows had links that couldn't be read.`);
   if (!project.tasks.length) throw new Error('The table has a header but no task rows.');
-  return { project, warnings };
+  return { project, warnings, header: rows[head] || [], map: C, guessed };
 }
 
 // Jira CSV export -> epics become summary tasks, their issues sit under them, sub-tasks under their
