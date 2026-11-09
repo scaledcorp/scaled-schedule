@@ -18,7 +18,7 @@ async function pdfjs() {
 export async function readPDF(buf, maxPages = 80) {
   const { getDocument, Util } = await pdfjs();
   const task = getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false, disableFontFace: true,
-    useSystemFonts: false, enableXfa: false, stopAtErrors: false });
+    useSystemFonts: false, enableXfa: false, stopAtErrors: false, wasmUrl: `${BASE}wasm/` });
   const doc = await task.promise;
   const pages = [];
   try {
@@ -45,10 +45,37 @@ export async function readPDF(buf, maxPages = 80) {
   return pages;
 }
 
-export async function importPDF(buf, fileName = '') {
+// Draw pages onto canvases about 2400 pixels wide, for reading scans with OCR.
+export async function renderPDF(buf, maxPages = 20) {
+  const { getDocument } = await pdfjs();
+  const task = getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false, enableXfa: false, stopAtErrors: false, wasmUrl: `${BASE}wasm/` });
+  const doc = await task.promise, out = [];
+  try {
+    for (let n = 1; n <= Math.min(doc.numPages, maxPages); n++) {
+      const page = await doc.getPage(n);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: Math.min(4, 2400 / base.width) });
+      const c = document.createElement('canvas');
+      c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      // print intent: draws in one go, without waiting on animation frames (which pause in hidden tabs)
+      await page.render({ canvasContext: g, canvas: c, viewport: vp, intent: 'print' }).promise;
+      out.push(c);
+      page.cleanup();
+    }
+  } finally { await task.destroy(); }
+  return out;
+}
+
+export async function importPDF(buf, fileName = '', progress) {
   const pages = await readPDF(buf);
   const count = pages.reduce((s, p) => s + p.words.length, 0);
-  if (!count) throw new Error('This PDF has no text in it (it looks like a scan). Reading scanned pages is coming next.');
+  if (!count) {
+    // a scan: pictures of pages, so read the text off them
+    const { importScannedPDF } = await import('./ocr.js');
+    return importScannedPDF(await renderPDF(buf), fileName, progress);
+  }
   const table = tableFromWords(pages);
   if (!table) throw new Error("Couldn't find a schedule table in this PDF. It reads tables with a task name column, like a schedule printed from P6, Project or Excel.");
   const name = fileName.replace(/\.[^.]+$/, '') || 'Imported from PDF';

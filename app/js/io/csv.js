@@ -73,7 +73,8 @@ const NAMES = ['name', 'task name', 'task', 'activity name', 'activity', 'task d
 function readDate(text) {
   let s = String(text ?? '').trim().replace(/\s*[A*]$/, '');
   if (!s) return null;
-  s = s.replace(/^(\d{1,2})[- ]([a-z]{3,})[- ,]+(\d{2,4})\b/i, (m, d, mo, y) => `${d} ${mo} ${y.length === 2 ? 2000 + +y : y}`);
+  // 04-Jan-27 (and 04-Jan27 or 04Jan27, as text read off a picture can come out)
+  s = s.replace(/^(\d{1,2})[- ]?([a-z]{3,})[- ,]*(\d{2,4})\b/i, (m, d, mo, y) => `${d} ${mo} ${y.length === 2 ? 2000 + +y : y}`);
   return parseDay(s, new Date().getFullYear()) ?? parseDay(s.replace(/[ T]+\d{1,2}:\d{2}(:\d{2})?\s*([ap]m)?$/i, ''), new Date().getFullYear());
 }
 
@@ -105,7 +106,7 @@ export const findHeader = rows => rows.slice(0, 20).findIndex(r => columns(r)(..
 // review screen), guess (fields to mark as guessed on every row, like dates read off a slide).
 // Returns the project plus what the review screen needs: the header, the column map and, per task,
 // the fields that were guessed.
-export function importTable(rows, { name = 'Imported project', outline = [], indents = [], extra = [], map = null, guess = [] } = {}) {
+export function importTable(rows, { name = 'Imported project', outline = [], indents = [], extra = [], map = null, guess = [], low = [] } = {}) {
   const head = Math.max(0, findHeader(rows));
   const C = map ? { ...Object.fromEntries(Object.keys(FIELDS).map(k => [k, -1])), ...map } : columnMap(rows[head] || []);
   if (C.name < 0) throw new Error("Couldn't find a task name column. Name one Task Name, Activity Name or Name.");
@@ -114,6 +115,8 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
   const warnings = [...extra], body = rows.slice(head + 1), at = i => head + 1 + i;
   const cell = (r, c) => (c >= 0 ? String(r[c] ?? '').trim() : '');
   const guessed = body.map(() => new Set(guess));
+  // cells the text reader wasn't sure of ([source row, column] pairs) mark that field as guessed
+  low.forEach(([r, c]) => { const f = Object.keys(FIELDS).find(k => C[k] === c); if (f && guessed[r - head - 1]) guessed[r - head - 1].add(f); });
   const remC = columns(rows[head] || [])('remaining duration', 'rem dur', 'remaining');
 
   // outline levels
@@ -135,7 +138,8 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
     if (s == null && cell(r, C.start)) g.add('start');
     if (f == null && cell(r, C.finish)) g.add('finish');
     if (!cell(r, C.name)) g.add('name');
-    let d = cell(r, C.dur) ? parseDuration(cell(r, C.dur), project) : null;
+    // (a duration read off a picture may have O for 0 or l for 1)
+    let d = cell(r, C.dur) ? parseDuration(cell(r, C.dur), project) ?? parseDuration(cell(r, C.dur).replace(/[Oo]/g, '0').replace(/[Il|]/g, '1'), project) : null;
     if (d == null && cell(r, C.dur)) g.add('dur');
     if (d == null && s != null && f != null) d = f < s ? 0 : cal.workBetween(startOfDay(s, cal), Math.max(startOfDay(s, cal), endOfDay(f, cal)));
     if (d == null && !(s != null && f != null)) g.add('dur');
@@ -171,7 +175,7 @@ export function importTable(rows, { name = 'Imported project', outline = [], ind
     if (cell(r, C.res)) t.assignments = parseAssignments(cell(r, C.res), project).assignments;
     // P6 prints an A after actual dates
     // P6 prints an A after actual dates; with a Remaining Duration column, progress follows from it
-    const actual = c => /\sA$/.test(cell(r, c));
+    const actual = c => /[\s\d]A$/.test(cell(r, c));
     if (C.pct < 0 && actual(C.start)) {
       const rem = remC >= 0 && remC !== C.dur ? parseDuration(cell(r, remC), project) : null;
       t.percent = actual(C.finish) || t.milestone ? 100 : rem != null && t.duration > 0 ? Math.max(0, Math.round((1 - rem / t.duration) * 100)) : t.percent;

@@ -8,6 +8,7 @@ import { columnMap } from './csv.js';
 import { parseDay } from '../model.js';
 import { weekday } from '../calendar.js';
 
+const LOW_CONF = 60;   // OCR words below this confidence are marked for review
 const median = a => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; };
 
 // words [{text, x0, x1, y, h}] -> lines, top to bottom, each sorted left to right
@@ -72,11 +73,11 @@ export function tableFromWords(pages) {
     // Text in a column starts near its header's left edge (numbers end near its right edge), so a
     // column reaches almost to where the next header starts: long names stay in the name column.
     const h = median(page.words.map(w => w.h)) || 8;
-    const bounds = cols.map((c, i) => (i + 1 < cols.length ? Math.max(c.x1, cols[i + 1].x0 - h * 0.6) : c.x1 + Math.max(60, (c.x1 - c.x0) * 2)));
+    const bounds = cols.map((c, i) => (i + 1 < cols.length ? Math.max(c.x1, cols[i + 1].x0 - h * 0.6) : c.x1 + Math.max(h * 7, (c.x1 - c.x0) * 2)));
     const colOf = w => {
       const cx = (w.x0 + w.x1) / 2;
       const i = bounds.findIndex(b => cx < b);
-      return i < 0 || (i === 0 && cx < cols[0].x0 - 40) ? -1 : i;
+      return i < 0 || (i === 0 && cx < cols[0].x0 - h * 4.5) ? -1 : i;
     };
     // A long name can wrap onto lines above and below the line holding the row's other values
     // (cells centered vertically): name-only lines tight against a row join its name.
@@ -101,22 +102,26 @@ export function tableFromWords(pages) {
         text[map.name] = `${text[map.id]} ${text[map.name]}`.trim(); row[map.name] = [...row[map.id], ...row[map.name]];
         text[map.id] = ''; row[map.id] = [];
       }
+      // cells holding a word the text reader wasn't sure of (pictures and scans only)
+      const low = new Set(row.flatMap((ws, c) => (ws.some(w => w.conf != null && w.conf < LOW_CONF) ? [c] : [])));
       let x = row[map.name][0]?.x0 ?? null;
       const nameOnly = !!text[map.name] && text.every((t, i) => i === map.name || !t);
       if (nameOnly) {
-        if (tight(prev, l) && !pending) { prev.text[map.name] = `${prev.text[map.name]} ${text[map.name]}`.trim(); prev.y = l.y; prev.x ??= x; continue; }
-        if (tight(pending, l)) { pending.text[map.name] += ` ${text[map.name]}`; pending.y = l.y; continue; }
+        const join = a => { if (low.size) a.low.add(map.name); };
+        if (tight(prev, l) && !pending) { prev.text[map.name] = `${prev.text[map.name]} ${text[map.name]}`.trim(); prev.y = l.y; prev.x ??= x; join(prev); continue; }
+        if (tight(pending, l)) { pending.text[map.name] += ` ${text[map.name]}`; pending.y = l.y; join(pending); continue; }
         flush();
-        pending = { text, y: l.y, page: p, x };
+        pending = { text, y: l.y, page: p, x, low };
         continue;
       }
       if (tight(pending, l)) {
         text[map.name] = `${pending.text[map.name]} ${text[map.name]}`.trim();
         x = pending.x ?? x;
+        pending.low.forEach(c => low.add(c));
         pending = null;
       } else flush();
       if (!text[map.name] && !(map.id >= 0 && text[map.id])) continue;
-      prev = { text, y: l.y, page: p, x };
+      prev = { text, y: l.y, page: p, x, low };
       rows.push(prev);
     }
     flush();
@@ -127,11 +132,12 @@ export function tableFromWords(pages) {
   // name indent is a level (Project style).
   const idCol = header.map.id;
   const banded = idCol >= 0 && rows.some(r => r.text[idCol]) && rows.some(r => !r.text[idCol]);
+  const tol = (median(pages.flatMap(pg => pg.words.map(w => w.h))) || 8) * 0.3;
   const pick = list => {
     const xs = [];
-    list.forEach(r => { if (r.x != null && !xs.some(v => Math.abs(v - r.x) < 2.5)) xs.push(r.x); });
+    list.forEach(r => { if (r.x != null && !xs.some(v => Math.abs(v - r.x) < tol)) xs.push(r.x); });
     xs.sort((a, b) => a - b);
-    return r => (r.x == null ? 0 : Math.max(0, xs.findIndex(v => Math.abs(v - r.x) < 2.5)));
+    return r => (r.x == null ? 0 : Math.max(0, xs.findIndex(v => Math.abs(v - r.x) < tol)));
   };
   const levelOf = pick(banded ? rows.filter(r => !r.text[idCol]) : rows);
   let band = -1;
@@ -142,7 +148,24 @@ export function tableFromWords(pages) {
     else ind[header.map.name] = band + 1;
     return ind;
   })];
-  return { rows: [header.cells.map(c => c.text), ...rows.map(r => r.text)], indents };
+  return { rows: [header.cells.map(c => c.text), ...rows.map(r => r.text)], indents,
+    low: rows.flatMap((r, i) => [...(r.low || [])].map(c => [i + 1, c])) };
+}
+
+// Words -> phrases (words that sit close on one line), with their boxes: the text items a timeline
+// picture gives the bar reader.
+export function phrases(words) {
+  return lines(words).flatMap(l => {
+    const out = [];
+    for (const w of l.words) {
+      const last = out[out.length - 1];
+      if (last && w.x0 <= last.x1 + Math.min(w.h, last.ws[last.ws.length - 1].h) * 0.85) { last.ws.push(w); last.x1 = Math.max(last.x1, w.x1); } else out.push({ x0: w.x0, x1: w.x1, ws: [w] });
+    }
+    return out.map(c => {
+      const top = Math.min(...c.ws.map(w => w.top ?? w.y - w.h)), bottom = Math.max(...c.ws.map(w => w.bottom ?? w.y));
+      return { x: c.x0, y: top, w: c.x1 - c.x0, h: bottom - top, text: c.ws.map(w => w.text).join(' '), prst: '' };
+    });
+  });
 }
 
 // ---------------------------------------------------------------- slides
@@ -199,10 +222,14 @@ export function ganttFromShapes(items, slideText = '') {
   const centers = axis.map(l => l.it.x + l.it.w / 2);
   const gaps = centers.slice(1).map((c, i) => c - centers[i]);
   const boxes = median(axis.map(l => l.it.w)) >= median(gaps) * 0.7;
+  // Month or quarter captions spaced evenly are centered over equal-width columns: treat each as a
+  // column one spacing wide (common when the column boxes themselves aren't separate shapes).
+  const even = !boxes && axis.every(l => l.a.kind !== 'day') && Math.max(...gaps) <= Math.min(...gaps) * 1.25;
   const pts = [];
-  axis.forEach(l => {
-    if (boxes) { pts.push([l.it.x, l.a.from], [l.it.x + l.it.w, l.a.to]); }
-    else pts.push([l.it.x + l.it.w / 2, (l.a.from + l.a.to) / 2]);
+  axis.forEach((l, i) => {
+    if (boxes) pts.push([l.it.x, l.a.from], [l.it.x + l.it.w, l.a.to]);
+    else if (even) { const half = median(gaps) / 2; pts.push([centers[i] - half, l.a.from], [centers[i] + half, l.a.to]); }
+    else pts.push([centers[i], (l.a.from + l.a.to) / 2]);
   });
   // Piecewise: each month box (or gap between label centers) has its own scale, since months differ
   // in length but are often drawn the same width. Beyond the ends, the end segments carry on.
@@ -217,7 +244,9 @@ export function ganttFromShapes(items, slideText = '') {
   };
   const axisItems = new Set(axis.map(l => l.it));
   const axisBottom = Math.max(...axis.map(l => l.it.y + l.it.h));
-  const left = Math.min(...axis.map(l => l.it.x)), right = Math.max(...axis.map(l => l.it.x + l.it.w));
+  // the timeline's width: the label boxes, or the columns the captions sit over
+  const half = boxes || even ? 0 : median(gaps) / 2;
+  const left = Math.min(...axis.map(l => l.it.x), seg[0][0] - half), right = Math.max(...axis.map(l => l.it.x + l.it.w), seg[seg.length - 1][0] + half);
   const span = right - left;
 
   // bars and milestones below the axis, inside its width
