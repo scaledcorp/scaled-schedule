@@ -7,7 +7,7 @@ import { SAMPLE, SAMPLE_EXPECTED } from '../app/js/sample.js';
 import { exportMSPDI, importMSPDI } from '../app/js/io/mspdi.js';
 import { exportXER } from '../app/js/io/xer.js';
 import { exportCSV, exportInversionCSV, exportJiraCSV, importCSV } from '../app/js/io/csv.js';
-import { interpret, readDay } from '../app/js/ui/iguana.js';
+import { Iguana, interpret, readDay } from '../app/js/ui/iguana.js';
 import { exportInversionModel } from '../app/js/io/inversion.js';
 
 const results = [];
@@ -320,6 +320,37 @@ test('Schedule Iguana: gaps, same-time steps, start dates and people', () => {
   eq(T('Paint').preds.find(x => x.id === T('Drywall').id).lag, 1440);
   run('start the project on Jan 11 2027');
   eq(show(p.start), '2027-01-11T08:00');
+});
+
+test('Schedule Iguana: hedges, deadlines, shifts, ASAP, tentative and "it"', () => {
+  const p = mini([['Design', 2], ['Build', 4], ['Test', 2], ['Launch', 0]]);
+  p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
+  const ctx = () => ({ project: p, computed: schedule(p) });
+  const run = q => { const r = interpret(q, ctx()); if (r.kind !== 'plan') throw new Error(`${q}: ${r.text}`); const c = schedule(p); r.run(p, c.calendar, c); return r; };
+  const T = n => p.tasks.find(t => t.name === n);
+  run('make Build about 5 days');
+  run('Test will take 3ish days');
+  eq([T('Build').duration, T('Test').duration], [2400, 1440]);
+  run('Build must be done by Jan 20 2027');
+  eq([T('Build').constraint.type, show(T('Build').constraint.date)], ['FNLT', '2027-01-20T17:00']);
+  run("Launch can't start before Feb 1 2027");
+  eq([T('Launch').constraint.type, show(T('Launch').constraint.date)], ['SNET', '2027-02-01T08:00']);
+  run('push Test by a week');
+  eq(show(T('Test').constraint.date), '2027-01-11T08:00');
+  run('pull Test in 2 days');
+  eq(show(T('Test').constraint.date), '2027-01-07T08:00');
+  run('start Test asap');
+  eq(T('Test').constraint.type, 'ASAP');
+  run('Design must be done before Test');
+  eq(T('Test').preds.some(x => x.id === T('Design').id), true);
+  run('add a tentative review 1 day after Build');
+  run('maybe add sign-off after Review');
+  eq([T('Review').notes, T('Sign-off').notes, T('Review').preds[0].id === T('Build').id], ['Tentative', 'Tentative', true]);
+  // "it" and "them" mean what was just touched
+  const fake = ids => ({ focusIds: ids, app: { project: p, store: { selection: new Set() } } });
+  eq(Iguana.prototype.resolve.call(fake([T('Test').id]), 'push it 2 days'), 'push Test 2 days');
+  eq(Iguana.prototype.resolve.call(fake([T('Review').id, T('Sign-off').id]), 'give them to Ana'), 'give Review to Ana\ngive Sign-off to Ana');
+  eq(Iguana.prototype.resolve.call(fake([T('Test').id]), 'add QA this week and give it to Ana'), 'add QA this week and give it to Ana');
 });
 
 const pass = results.filter(r => r[1]).length;
