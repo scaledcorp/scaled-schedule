@@ -24,6 +24,7 @@ const importPDF = async (buf, name, progress) => (await import('./io/pdf.js')).i
 const importImage = async (blob, name, progress) => (await import('./io/ocr.js')).importImage(blob, name, progress);
 
 const P = {
+  new: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M12 12v6M9 15h6',
   open: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
   save: 'M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 3v5h7V3M7 21v-7h10v7',
   exportMenu: 'M12 15V3M7 8l5-5 5 5M5 21h14',
@@ -39,7 +40,7 @@ const P = {
   theme: 'M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z', palette: 'M5 8l4 4-4 4M11 16h8',
   install: 'M12 4v11M7 10l5 5 5-5M5 20h14',
 };
-const LABELS = { open: 'Open', save: 'Save', exportMenu: 'Export', addTask: 'Task', install: 'Install' };
+const LABELS = { new: 'New', open: 'Open', save: 'Save', exportMenu: 'Export', addTask: 'Task', install: 'Install' };
 const icon = k => `<svg viewBox="0 0 24 24"><path d="${P[k]}"/></svg>`;
 const safeName = s => (s || 'schedule').replace(/[\\/:*?"<>|]+/g, '').trim() || 'schedule';
 
