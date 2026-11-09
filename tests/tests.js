@@ -278,6 +278,30 @@ test('Schedule Iguana picks the closest command for loose wording', () => {
   eq(interpret('add Sign-off 1 day after Client review and contract', ctx2).lines[0], 'Add "Sign-off", 1 day, after "Client review and contract"');
 });
 
+test('Schedule Iguana adds several tasks, chains and phases in one request', () => {
+  const p = mini([['Design', 2], ['Build', 3]]);
+  p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
+  const ctx = () => ({ project: p, computed: schedule(p) });
+  const run = q => { const r = interpret(q, ctx()); if (r.kind !== 'plan') throw new Error(`${q}: ${r.text}`); const c = schedule(p); r.run(p, c.calendar, c); return r; };
+  run('add three new tasks');
+  eq(p.tasks.slice(2).map(t => t.name), ['New task 1', 'New task 2', 'New task 3']);
+  run('add review 2 days, sign-off and a handover milestone after Build for Ana');
+  const [rv, so, ho] = ['Review', 'Sign-off', 'Handover'].map(n => p.tasks.find(t => t.name === n));
+  eq([rv.duration, so.duration, ho.milestone, rv.preds[0].id === p.tasks[1].id, so.preds[0].id === p.tasks[1].id], [960, 480, true, true, true]);
+  eq(p.resources.map(r => r.name), ['Ana']);
+  run('add framing 3 days, then drywall 4 days, then paint 2 days');
+  const [fr, dw, pt] = ['Framing', 'Drywall', 'Paint'].map(n => p.tasks.find(t => t.name === n));
+  eq([dw.preds[0].id === fr.id, pt.preds[0].id === dw.id, dw.duration], [true, true, 1920]);
+  const q = mini([]);
+  const r = interpret('Create a schedule for the kitchen remodel: demo 3 days, then plumbing 2 days, then paint 2 days, inspection milestone.\nCloseout: punch list 2 days, final walkthrough milestone', { project: q, computed: schedule(q) });
+  eq(r.kind, 'plan');
+  r.run(q);
+  eq(q.tasks.map(t => [t.name, t.level]), [['Kitchen remodel', 1], ['Demo', 2], ['Plumbing', 2], ['Paint', 2], ['Inspection', 2], ['Closeout', 1], ['Punch list', 2], ['Final walkthrough', 2]]);
+  const s = schedule(q);
+  eq(show(s.byId.get(q.tasks[6].id).es) > show(s.byId.get(q.tasks[4].id).es), true);
+  eq(show(s.finish), '2027-01-14T17:00');
+});
+
 const pass = results.filter(r => r[1]).length;
 document.getElementById('summary').textContent = `${pass} of ${results.length} passed`;
 document.getElementById('summary').className = pass === results.length ? 'ok' : 'bad';

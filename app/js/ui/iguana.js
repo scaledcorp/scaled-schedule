@@ -119,6 +119,111 @@ export function readDay(text, refYear, today = Math.floor(todayMinutes() / 1440)
 // Reads one request. Returns a plan (shown as a preview, then run through the normal undo history),
 // an answer, or "undo". Pure: it never changes the project itself.
 export function interpret(text, ctx) {
+  const parts = clauses(text);
+  return parts.length > 1 ? compound(parts, ctx) : single(text, ctx);
+}
+
+// ---------------------------------------------------------------- bigger requests
+// Several requests in one message (lines, semicolons or sentences) become one plan, previewed together
+// and undone together. Each part is read after the earlier parts are applied, so "add Review" in one
+// sentence and "link Review to Launch" in the next both work.
+function clauses(text) {
+  return text.split(/\s*(?:\n+|;\s*|\.\s+(?=[A-Za-z]))\s*/).map(c => c.trim().replace(/[.!]+$/, '')).filter(Boolean);
+}
+
+function compound(parts, ctx) {
+  const trial = structuredClone(ctx.project), lines = [], answers = [];
+  for (let i = 0; i < parts.length; i++) {
+    const comp = schedule(trial);
+    const r = single(parts[i], { project: trial, computed: comp, chain: i > 0 });
+    if (r.kind === 'plan') { lines.push(...r.lines); r.run(trial, comp.calendar, comp); }
+    else if (r.kind === 'answer' && !r.unknown) answers.push(r.text);
+    else return { kind: 'answer', unknown: true, suggestions: r.suggestions || [],
+      text: `I followed you up to "${parts[i]}". Could you say that part another way? Is it one of these?` };
+  }
+  if (!lines.length) return { kind: 'answer', text: answers.join(' ') };
+  return plan('Make several changes', lines, p => {
+    let last;
+    parts.forEach((part, i) => {
+      const comp = schedule(p);
+      const r = single(part, { project: p, computed: comp, chain: i > 0 });
+      if (r.kind === 'plan') last = r.run(p, comp.calendar, comp) ?? last;
+    });
+    return last;
+  });
+}
+
+const COUNT = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
+const CHAIN_WORDS = /\bthen\b|->|→|\bfollowed by\b|\bin (?:that )?order\b|\bone after (?:the )?other\b/i;
+
+// "design 3 days, then build (5 days) and a launch milestone" -> items, and whether they run in order.
+function parseItems(list, project) {
+  const chain = CHAIN_WORDS.test(list);
+  const durRe = new RegExp(`\\(?\\s*${NUM}[ -]?${UNIT}\\b\\s*\\)?`, 'i');
+  const items = list.replace(/\b(?:in (?:that )?order|one after (?:the )?other|at the (?:end|start))\b/ig, ' ')
+    .split(/\s*(?:,|->|→|\bthen\b|\bfollowed by\b|\band\b)\s*/i).map(x => x.trim()).filter(Boolean).map(x => {
+      const dm = x.match(durRe);
+      const milestone = /\bmilestone\b/i.test(x);
+      let name = x.replace(durRe, ' ').replace(/\b(?:a|an|the|new|task|tasks|step|milestone|called|named|of)\b/gi, ' ');
+      name = cap(clean(name.replace(/\s+/g, ' ')));
+      return name ? { name, dur: milestone ? 0 : dm ? durOf(dm[1], dm[2], project) : null, milestone } : null;
+    }).filter(Boolean);
+  return { items, chain };
+}
+
+// "three new tasks", "2 milestones: A and B", or any list of two or more tasks.
+function parseMany(r, project) {
+  const cm = r.match(/^(?:(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+)(?:new\s+|more\s+|extra\s+|other\s+)?(tasks?|steps?|items?|milestones?)\b\s*(?:called|named|:)?\s*(.*)$/i);
+  if (cm) {
+    const n = /^\d+$/.test(cm[1]) ? +cm[1] : COUNT[cm[1].toLowerCase()], ms = /^m/i.test(cm[2]);
+    const listed = cm[3] ? parseItems(cm[3], project) : { items: [], chain: false };
+    if (listed.items.length) return listed;
+    if (n > 1 && n <= 50) return { chain: false, items: Array.from({ length: n }, (_, i) => ({ name: `${ms ? 'Milestone' : 'New task'} ${i + 1}`, dur: ms ? 0 : null, milestone: ms })) };
+  }
+  if (/,|\bthen\b|->|→|\band\b/i.test(r)) { const listed = parseItems(r, project); if (listed.items.length >= 2) return listed; }
+  return null;
+}
+
+function planMany({ items, chain }, { after = null, who = null, phase = null, chainFrom = null }, project) {
+  const fmt = it => (it.milestone ? `${it.name} (milestone)` : `${it.name} (${formatDuration(it.dur ?? project.minutesPerDay, project)})`);
+  const lines = [
+    `${phase ? `Add a "${phase}" phase with` : 'Add'} ${items.length} tasks: ${items.slice(0, 6).map(fmt).join(', ')}${items.length > 6 ? `, and ${items.length - 6} more` : ''}`,
+    chain ? 'Each one starts after the one before' : after ? 'Side by side' : null,
+    after && `First one starts after "${after.name}"`, who && `Assign ${who}`,
+  ];
+  return plan(phase ? 'Add a phase' : 'Add tasks', lines, p => {
+    let i = after ? subtreeEnd(p.tasks, idx(p, after)) : p.tasks.length;
+    let level = after ? after.level : 1;
+    const startAfter = after ? after.id : chainFrom;
+    if (phase) { insertTask(p, i++, { name: phase, level }); level++; }
+    let prev = null, lastId = null;
+    for (const it of items) {
+      const t = insertTask(p, i++, { name: it.name, level, duration: it.dur ?? p.minutesPerDay, milestone: !!it.milestone });
+      const from = chain ? (prev ?? startAfter) : startAfter;
+      if (from) t.preds.push({ id: from, type: 'FS', lag: 0 });
+      if (who) t.assignments = parseAssignments(who, p).assignments;
+      prev = t.id; lastId = t.id;
+    }
+    return lastId;
+  }, { adds: true });
+}
+
+// "Kitchen remodel: demo 3 days, then plumbing 2 days, then paint" or "create a schedule for X: ..."
+// becomes a phase (summary task) whose steps follow each other unless it says "at the same time".
+function planBlock(text, { project, chain }) {
+  const m = text.match(/^(?:(?:create|make|build|start|plan|set up|draft)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:project|schedule|plan|phase|gantt)\s*(?:for|called|named|of)?\s*|phase\s*\d*\s*[.-]?\s*)?([^:]{0,60}):\s*(.+)$/i);
+  if (!m) return null;
+  const listed = parseItems(m[2], project);
+  if (listed.items.length < 2) return null;
+  if (!/\b(?:at the same time|in parallel|together|side by side)\b/i.test(m[2])) listed.chain = true;
+  const phase = cap(clean(m[1].replace(/^(?:the|a|an|our|my)\s+/i, ''))) || null;
+  const lastLeaf = [...project.tasks].reverse().find((t, k, arr) => !project.tasks[project.tasks.indexOf(t) + 1] || project.tasks[project.tasks.indexOf(t) + 1].level <= t.level);
+  return planMany(listed, { phase, chainFrom: chain && lastLeaf ? lastLeaf.id : null }, project);
+}
+
+function single(text, ctx) {
+  const blk = planBlock(text.trim(), ctx);
+  if (blk) return blk;
   const n = normalize(text);
   const res = interpretCore(n.text, ctx);
   // No rule matched, but one suggestion clearly fits the wording: read it that way (the preview still
@@ -284,7 +389,23 @@ function suggest(s, project, computed) {
     text: "I'm not sure what you meant. Is it one of these? Tap one, or type it your way." };
 }
 
+// Several tasks at once ("three new tasks", "design, build and test", "A then B then C"), else one.
 function planAdd(rest, project) {
+  if (/["“]/.test(rest)) return planAddSingle(rest, project);
+  let r = ` ${rest} `, after = null, who = null;
+  r = r.replace(/\s(?:right\s+)?after\s+(.+?)(?=\s+(?:and\s+(?:give|assign)|give|assign(?:ed)?|for)\b|\s*$)/i, (x, y) => { after = y; return ' '; });
+  r = r.replace(/\s(?:and\s+)?(?:give (?:it|them) to|assign(?:ed)?(?: (?:it|them))? to|for)\s+(.+?)\s*$/i, (x, y) => {
+    if (new RegExp(`^${NUM} ?${UNIT}\\b`, 'i').test(y.trim())) return x;   // "for 3 days" is a duration, not a person
+    who = clean(y); return ' ';
+  });
+  const many = parseMany(r.trim(), project);
+  if (!many) return planAddSingle(rest, project);
+  const pred = after ? findTask(project, after) : null;
+  if (after && !pred) return notFound(after);
+  return planMany(many, { after: pred, who }, project);
+}
+
+function planAddSingle(rest, project) {
   let r = ` ${rest} `, after = null, who = null, d = null;
   const milestone = /\bmilestone\b/i.test(r);
   const quoted = r.match(/["“]([^"”]+)["”]/);
