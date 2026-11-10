@@ -1,4 +1,4 @@
-// Schedule Iguana: a small helper that turns plain requests into the app's normal, undoable edits and
+// Schedule Helper: a small helper that turns plain requests into the app's normal, undoable edits and
 // answers questions from the computed schedule. Version 1 reads requests with built-in rules (instant,
 // offline, nothing to download). A small local AI model can sit behind the same plan format later.
 import { deleteTasks, endOfDay, fmtDate, fmtHours, fmtMoney, formatDuration, insertTask, parseAssignments, parseDay,
@@ -943,15 +943,15 @@ const SUGGEST = ["What's on the critical path?", "Who's over-booked?", 'When doe
 export class Iguana {
   constructor(app) {
     this.app = app;
-    this.btn = Object.assign(document.createElement('button'), { className: 'iguana-btn', title: 'Ask Schedule Iguana' });
-    this.btn.innerHTML = '<img src="iguana.svg" alt="Schedule Iguana">';
-    this.panel = Object.assign(document.createElement('section'), { className: 'iguana', ariaLabel: 'Schedule Iguana' });
+    this.btn = Object.assign(document.createElement('button'), { className: 'iguana-btn', title: 'Ask Schedule Helper' });
+    this.btn.innerHTML = '<img src="iguana.svg" alt="Schedule Helper">';
+    this.panel = Object.assign(document.createElement('section'), { className: 'iguana', ariaLabel: 'Schedule Helper' });
     this.panel.innerHTML = `
-      <header><img src="iguana.svg" alt=""><div><b>Schedule Iguana</b><small>Runs on this computer</small></div>
+      <header><img src="iguana.svg" alt=""><div><b>Schedule Helper</b><small>Runs on this computer</small></div>
         <button class="btn icon" data-act="close" title="Close (Esc)"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
       <div class="ig-log" aria-live="polite"></div>
       <div class="ig-chips">${SUGGEST.map(x => `<button data-say="${esc(x)}">${esc(x)}</button>`).join('')}</div>
-      <form class="ig-input"><input placeholder="Ask Schedule Iguana" aria-label="Ask Schedule Iguana" autocomplete="off">
+      <form class="ig-input"><input placeholder="Ask Schedule Helper" aria-label="Ask Schedule Helper" autocomplete="off">
         <button class="btn icon primary" title="Send" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></form>`;
     document.body.append(this.btn, this.panel);
     this.log = this.panel.querySelector('.ig-log');
@@ -974,7 +974,7 @@ export class Iguana {
     };
     this.pending = [];
     this.tipsSeen = new Set();
-    this.say("Hi, I'm Schedule Iguana. Tell me what to change, like \"add a 3-day testing task after Build\", or ask \"what's on the critical path?\" I show you the plan before I touch anything.");
+    this.say("Hi, I'm Schedule Helper. Tell me what to change, like \"add a 3-day testing task after Build\", or ask \"what's on the critical path?\" I show you the plan before I touch anything.");
   }
 
   open() { this.panel.classList.add('open'); this.btn.classList.add('hide'); setTimeout(() => this.input.focus(), 50); }
