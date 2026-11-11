@@ -290,7 +290,7 @@ class App {
       c('viewGantt', 'Show the Gantt view'), c('viewResources', 'Show the resource sheet'),
       c('settings', 'Project and calendar settings'), c('theme', 'Switch light or dark'), c('print', 'Print'),
       c('install', 'Install as an app (open .sched files with a double-click)'),
-      c('iguana', 'Ask Schedule Iguana'),
+      c('iguana', 'Ask Schedule Helper'),
     ];
   }
 

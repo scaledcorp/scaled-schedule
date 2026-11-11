@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Schedule Iguana">
-  <title>Schedule Iguana</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Schedule Helper">
+  <title>Schedule Helper</title>
   <rect width="64" height="64" rx="16" fill="#12B886"/>
   <path d="M13 33 L16 22 L20 29 L23 17 L28 27 L32 14 L36 25 L41 16 L43 26 L48 20 L49 31 Z" fill="#087F5B"/>
   <path d="M10 41 C10 29 20 23 33 23 C45 23 53 28 56 34 C57.5 38 55 41.5 50.5 42.5 L31 47 C20 49.5 10 47 10 41 Z" fill="#B2F2BB" stroke="#087F5B" stroke-width="2" stroke-linejoin="round"/>

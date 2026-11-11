@@ -209,7 +209,7 @@ test('Project XML without durations (Inversion timeline export)', () => {
   eq(at(q, r, 2), ['2027-01-20T08:00', '2027-01-20T17:00']);
 });
 
-test('Schedule Iguana: add, move, link and answer', () => {
+test('Schedule Helper: add, move, link and answer', () => {
   const p = mini([['Design', 2], ['Build', 3], ['Launch', 1]]);
   p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
   p.tasks[2].preds = [{ id: p.tasks[1].id, type: 'FS', lag: 0 }];
@@ -230,7 +230,7 @@ test('Schedule Iguana: add, move, link and answer', () => {
   eq(interpret('make build 5 days', ctx()).lines[0], 'Make "Build" 5 days');
 });
 
-test('Schedule Iguana understands everyday wording', () => {
+test('Schedule Helper understands everyday wording', () => {
   const p = mini([['Design', 2], ['Build', 3], ['Launch', 1]]);
   p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
   p.tasks[2].preds = [{ id: p.tasks[1].id, type: 'FS', lag: 0 }];
@@ -269,7 +269,7 @@ test('Inversion model JSON: phases as clusters, goals, tasks and requires links'
   eq([type(build.typeId), build.properties['task.start'], build.properties['task.end']], ['Task', '2027-01-19', '2027-01-28']);
 });
 
-test('Schedule Iguana picks the closest command for loose wording', () => {
+test('Schedule Helper picks the closest command for loose wording', () => {
   const p = mini([['Design', 2], ['Build', 3], ['Testing', 2], ['Launch', 1]]);
   for (let i = 1; i < 4; i++) p.tasks[i].preds = [{ id: p.tasks[i - 1].id, type: 'FS', lag: 0 }];
   const ctx = { project: p, computed: schedule(p) };
@@ -287,7 +287,7 @@ test('Schedule Iguana picks the closest command for loose wording', () => {
   eq(interpret('add Sign-off 1 day after Client review and contract', ctx2).lines[0], 'Add "Sign-off", 1 day, after "Client review and contract"');
 });
 
-test('Schedule Iguana adds several tasks, chains and phases in one request', () => {
+test('Schedule Helper adds several tasks, chains and phases in one request', () => {
   const p = mini([['Design', 2], ['Build', 3]]);
   p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
   const ctx = () => ({ project: p, computed: schedule(p) });
@@ -311,7 +311,7 @@ test('Schedule Iguana adds several tasks, chains and phases in one request', () 
   eq(show(s.finish), '2027-01-14T17:00');
 });
 
-test('Schedule Iguana: gaps, same-time steps, start dates and people', () => {
+test('Schedule Helper: gaps, same-time steps, start dates and people', () => {
   const p = mini([]);
   const ctx = () => ({ project: p, computed: schedule(p) });
   const run = q => { const r = interpret(q, ctx()); if (r.kind !== 'plan') throw new Error(`${q}: ${r.text}`); const c = schedule(p); r.run(p, c.calendar, c); return r; };
@@ -331,7 +331,7 @@ test('Schedule Iguana: gaps, same-time steps, start dates and people', () => {
   eq(show(p.start), '2027-01-11T08:00');
 });
 
-test('Schedule Iguana: hedges, deadlines, shifts, ASAP, tentative and "it"', () => {
+test('Schedule Helper: hedges, deadlines, shifts, ASAP, tentative and "it"', () => {
   const p = mini([['Design', 2], ['Build', 4], ['Test', 2], ['Launch', 0]]);
   p.tasks[1].preds = [{ id: p.tasks[0].id, type: 'FS', lag: 0 }];
   const ctx = () => ({ project: p, computed: schedule(p) });
@@ -362,7 +362,7 @@ test('Schedule Iguana: hedges, deadlines, shifts, ASAP, tentative and "it"', () 
   eq(Iguana.prototype.resolve.call(fake([T('Test').id]), 'add QA this week and give it to Ana'), 'add QA this week and give it to Ana');
 });
 
-test('Schedule Iguana: planning sense (health, buffer, know-how, tips)', () => {
+test('Schedule Helper: planning sense (health, buffer, know-how, tips)', () => {
   const p = mini([['Design', 5], ['Build', 25], ['Paint', 5], ['Test', 3], ['Handover', 2], ['Launch', 0]]);
   for (let i = 1; i < p.tasks.length; i++) p.tasks[i].preds = [{ id: p.tasks[i - 1].id, type: 'FS', lag: 0 }];
   const ctx = () => ({ project: p, computed: schedule(p) });
@@ -393,7 +393,7 @@ test('Schedule Iguana: planning sense (health, buffer, know-how, tips)', () => {
   eq(coach(p, schedule(p), { edited: [T('Build').id] }).id, 'long');
 });
 
-test('Schedule Iguana: what-if, finish sooner, typos, corrections and project controls', () => {
+test('Schedule Helper: what-if, finish sooner, typos, corrections and project controls', () => {
   const p = mini([['Design', 5], ['Build', 10], ['Paint', 5], ['Launch', 0], ['Permits', 2]]);
   for (let i = 1; i < 4; i++) p.tasks[i].preds = [{ id: p.tasks[i - 1].id, type: 'FS', lag: 0 }];
   const ctx = () => ({ project: p, computed: schedule(p) });
